@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "Copy this to team.json and fill in the real email addresses.",
+    "team.json is gitignored — it holds people's contact details.",
+    "",
+    "role:    'admin' | 'tutor' | 'student' | 'parent'",
+    "teaches: give an admin a tutor record as well, so the owner can run the",
+    "         practice and take lessons from the same account. Ignored for",
+    "         anyone whose role is already 'tutor'.",
+    "",
+    "Emails below are guesses at a house convention and are almost certainly",
+    "wrong. Every one of them will receive a real invitation, so check them",
+    "against the actual addresses before running with --send."
+  ],
+  "people": [
+    {
+      "firstName": "Evangelos",
+      "lastName": "Yiallourides",
+      "email": "",
+      "role": "admin",
+      "teaches": true,
+      "headline": "Owner",
+      "note": "Runs the practice and teaches. Admin role plus a tutor record."
+    },
+    {
+      "firstName": "Maria",
+      "lastName": "Avlonitis",
+      "email": "",
+      "role": "tutor",
+      "headline": ""
+    },
+    {
+      "firstName": "Brian",
+      "lastName": "Gali",
+      "email": "",
+      "role": "tutor",
+      "headline": ""
+    },
+    {
+      "firstName": "Theodora",
+      "lastName": "Kirby",
+      "email": "",
+      "role": "tutor",
+      "headline": ""
+    },
+    {
+      "firstName": "Dimitri",
+      "lastName": "Dimitriou",
+      "email": "",
+      "role": "tutor",
+      "headline": ""
+    },
+    {
+      "firstName": "Sotiris",
+      "lastName": "Xiouros",
+      "email": "",
+      "role": "tutor",
+      "headline": ""
+    }
+  ]
+}

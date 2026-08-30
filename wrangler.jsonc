@@ -1,0 +1,80 @@
+/**
+ * Cloudflare Workers — Own Your Study Portal
+ * ---------------------------------------------------------------------------
+ * The marketing site is a static upload to Cloudflare Pages and needs none of
+ * this. The portal is a server: it holds sessions, talks to Supabase, verifies
+ * webhook signatures and calls Google. So it deploys as a Worker, built by
+ * @opennextjs/cloudflare, on its own subdomain.
+ *
+ * Secrets do NOT live in this file. `vars` below is public — it ships to the
+ * client for anything NEXT_PUBLIC_, and is readable by anyone with access to
+ * the Cloudflare dashboard regardless. Everything sensitive goes in with
+ * `wrangler secret put`, which the README lists.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "own-your-study-portal",
+  "main": ".open-next/worker.js",
+
+  /* nodejs_compat is not optional here. Three modules import node:crypto —
+     the Recall webhook's HMAC verification, and the signing and reading of the
+     Google OAuth state parameter. Without the flag they fail at runtime, and
+     the webhook failing closed means transcripts silently stop arriving.
+
+     global_fetch_strictly_public makes fetch() to our own hostname go back out
+     through the edge rather than being short-circuited inside the Worker,
+     which is what the adapter expects.
+
+     The date is a behaviour switch, not a version number: raising it opts into
+     runtime changes made since. Raise it deliberately and re-run
+     `npm run cf:preview` plus the isolation script afterwards, rather than
+     bumping it because wrangler suggested a newer one. */
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+
+  /* The Worker calls itself for cache revalidation. Named the same as `name`
+     above; if you rename the Worker, rename it here too. */
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "own-your-study-portal"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  },
+
+  /* Public configuration only. The portal reads these through src/lib/env.ts,
+     which treats an empty value as absent — so a missing one degrades to demo
+     mode or a switched-off integration rather than a crash. */
+  "vars": {
+    "NEXT_PUBLIC_APP_URL": "https://portal.ownyourstudy.com",
+    "NEXT_PUBLIC_MARKETING_URL": "https://ownyourstudy.com",
+    "NEXT_PUBLIC_PORTAL_TIME_ZONE": "Europe/London"
+  },
+
+  /* A separate Worker and a separate Supabase project, so a staging deploy can
+     never write to a real student's record. Deploy with `--env staging`. */
+  "env": {
+    "staging": {
+      "name": "own-your-study-portal-staging",
+      "services": [
+        {
+          "binding": "WORKER_SELF_REFERENCE",
+          "service": "own-your-study-portal-staging"
+        }
+      ],
+      "vars": {
+        "NEXT_PUBLIC_APP_URL": "https://portal-staging.ownyourstudy.com",
+        "NEXT_PUBLIC_MARKETING_URL": "https://ownyourstudy.com",
+        "NEXT_PUBLIC_PORTAL_TIME_ZONE": "Europe/London"
+      }
+    }
+  }
+}

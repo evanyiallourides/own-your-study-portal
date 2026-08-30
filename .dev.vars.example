@@ -1,0 +1,29 @@
+# Local Workers runtime secrets — copy to .dev.vars, which is gitignored.
+#
+# `npm run cf:preview` runs the built Worker in workerd rather than in Node, so
+# it reads from here rather than from .env.local. Same values, different file:
+# .env.local is for `next dev`, .dev.vars is for the Worker.
+#
+# In production none of these live in a file at all. They go in one at a time
+# with `wrangler secret put NAME`, so they are never in the repo and never in
+# wrangler.jsonc.
+
+NEXTJS_ENV=development
+
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1
+
+RECALL_API_KEY=
+RECALL_REGION=us-west-2
+RECALL_WEBHOOK_SECRET=
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+NEXT_PUBLIC_APP_URL=http://localhost:8787
+NEXT_PUBLIC_MARKETING_URL=https://ownyourstudy.com
+NEXT_PUBLIC_PORTAL_TIME_ZONE=Europe/London
