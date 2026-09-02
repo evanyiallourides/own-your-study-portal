@@ -59,14 +59,24 @@ import type {
   Tutor,
 } from "@/lib/types";
 
+/* `students` holds two foreign keys to `profiles` — `profile_id` and
+   `consent_recorded_by` — so a bare `profiles(*)` embed is ambiguous and
+   PostgREST refuses the whole query with PGRST201 rather than guessing. The
+   constraint name pins it to the one we mean. `tutors` and `parents` have a
+   single link each and need no such hint. */
+const STUDENT_PROFILE = `profile:profiles!students_profile_id_fkey(*)`;
+
 const LESSON_SELECT = `
   *,
   subject:subjects(*),
   tutor:tutors(*, profile:profiles(*)),
-  student:students(*, profile:profiles(*))
+  student:students(*, ${STUDENT_PROFILE})
 `;
 
-const STUDENT_SELECT = `*, profile:profiles(*)`;
+const STUDENT_SELECT = `*, ${STUDENT_PROFILE}`;
+
+/** `tutors` links to `profiles` once, so this needs no disambiguation. */
+const TUTOR_SELECT = `*, profile:profiles(*)`;
 
 /** Signed URLs are minted per read and expire quickly — a lesson board should
  *  not be forwardable a week later. */
@@ -171,7 +181,7 @@ export class SupabaseRepository implements Repository {
   }
 
   async listTutors(search?: string): Promise<Tutor[]> {
-    const { data, error } = await this.db.from("tutors").select(STUDENT_SELECT);
+    const { data, error } = await this.db.from("tutors").select(TUTOR_SELECT);
     if (error) fail("Could not load tutors", error);
     const tutors = (data ?? []).map(mapTutor);
     if (!search) return tutors.sort((a, b) => a.profile.fullName.localeCompare(b.profile.fullName));
@@ -184,7 +194,7 @@ export class SupabaseRepository implements Repository {
   async getTutor(tutorId: string): Promise<Tutor | null> {
     const { data, error } = await this.db
       .from("tutors")
-      .select(STUDENT_SELECT)
+      .select(TUTOR_SELECT)
       .eq("id", tutorId)
       .maybeSingle();
     if (error) fail("Could not load the tutor", error);
@@ -212,7 +222,7 @@ export class SupabaseRepository implements Repository {
     let q = this.db
       .from("tutor_student_subjects")
       .select(
-        `*, tutor:tutors(*, profile:profiles(*)), student:students(*, profile:profiles(*)), subject:subjects(*)`,
+        `*, tutor:tutors(*, profile:profiles(*)), student:students(*, ${STUDENT_PROFILE}), subject:subjects(*)`,
       )
       .order("created_at", { ascending: false });
     if (filter.tutorId) q = q.eq("tutor_id", filter.tutorId);

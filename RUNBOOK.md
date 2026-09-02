@@ -35,11 +35,17 @@ automatic Meet links.
 2. Save the database password it gives you. It is shown once.
 3. **Project Settings → API** has the three values you need:
 
-   | Dashboard label | Goes in as |
-   | --- | --- |
-   | Project URL | `NEXT_PUBLIC_SUPABASE_URL` |
-   | `anon` `public` | `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
-   | `service_role` `secret` | `SUPABASE_SERVICE_ROLE_KEY` |
+   | Dashboard label | Starts with | Goes in as |
+   | --- | --- | --- |
+   | Project URL | `https://` | `NEXT_PUBLIC_SUPABASE_URL` |
+   | Publishable key | `sb_publishable_` | `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
+   | Secret key | `sb_secret_` | `SUPABASE_SERVICE_ROLE_KEY` |
+
+   The variable names still say *anon* and *service_role* after the older key
+   format, which is what the Supabase client library expects. The **values**
+   are the new publishable/secret keys; the legacy `eyJ…` JWT pair is disabled
+   on this project and its signing key revoked. New keys can be rotated
+   individually, which the old shared-secret pair could not be.
 
 The service-role key bypasses every access rule in the database. It belongs in
 Cloudflare secrets and in your own `.env.local`, and nowhere else — never in
@@ -92,9 +98,64 @@ anybody create a profile against your database.
 Sign-in links fail silently if the redirect URL is missing, so it is worth
 re-reading that line.
 
+### Custom SMTP — not optional
+
+Supabase's built-in mail server sends **two emails per hour**, and the limit is
+greyed out because it is not yours to raise. Two is fewer than one team. Every
+invitation past the second fails, and the failure looks like a rate-limit error
+rather than anything to do with email, so it is worth doing before stage 8
+rather than discovering it there.
+
+`ownyourstudy.com` sends through **Resend**:
+
+1. <https://resend.com> → **Domains** → add `ownyourstudy.com`, region Ireland.
+2. Choose **Manual setup**, not *Auto configure* — the latter wants standing
+   write access to the whole Cloudflare DNS zone to add three records.
+3. Cloudflare → **DNS → Records → Import**, and upload a BIND file with the
+   three records Resend shows. Importing beats typing: the DKIM value is a
+   1024-bit key and a single wrong character fails verification with no clue
+   which character it was. Leave *Proxy imported DNS records* unchecked.
+
+   ```
+   resend._domainkey.ownyourstudy.com. 1 IN TXT "p=…"
+   send.ownyourstudy.com. 1 IN MX 10 feedback-smtp.eu-west-1.amazonses.com.
+   send.ownyourstudy.com. 1 IN TXT "v=spf1 include:amazonses.com ~all"
+   ```
+
+   Resend also offers an `MX` on the apex for **Enable Receiving**. Skip it
+   unless you mean it: it makes Resend the inbound mail host for the entire
+   domain.
+4. Back in Resend, **Verify DNS Records**. A minute or two.
+5. **API keys → Create**, permission *Sending access*. It is shown once —
+   it is the SMTP password, and Supabase's password field cannot be read back,
+   so keep a copy.
+6. Supabase → **Authentication → Emails → SMTP Settings**, enable, and fill in:
+
+   | Field | Value |
+   | --- | --- |
+   | Sender email | `no-reply@ownyourstudy.com` |
+   | Sender name | Own Your Study |
+   | Host | `smtp.resend.com` |
+   | Port | 465 |
+   | Username | `resend` |
+   | Password | the Resend API key |
+
+**Checkpoint.** Saving raises the rate limit from 2/hour to **30/hour** — the
+banner says so. After the next invitation, **resend.com/emails** should show it
+as *Delivered*. That is the only proof that matters; Supabase reporting success
+only means it handed the message over.
+
 ---
 
 ## 4 · First deploy
+
+> **This project deploys to Vercel, not Cloudflare Workers.** The built Worker
+> came to 13 MB against the free tier's 3 MB script limit. Stages 4–6 below
+> describe the Workers path and are kept for when that changes; today the
+> deploy is `git push`, and the three secrets live in **Vercel → Settings →
+> Environment Variables**. Set the two `NEXT_PUBLIC_` ones as type **Config**,
+> not Secret — Vercel rejects a public-prefixed variable marked Secret, and the
+> type cannot be changed after saving, only deleted and recreated.
 
 Deliberately before the secrets, so you find out the deploy works while
 nothing sensitive is attached to it.
@@ -179,9 +240,15 @@ npm run preflight
 
 Everything under **STOP** should be gone.
 
-Then the thing that has never been tested against a real database: **the access
-rules.** Create one throwaway student and one throwaway tutor through
-**Admin → Students / Tutors**, assign them, and confirm by hand:
+Then the access rules, against the real database:
+
+```bash
+npm run verify:access
+```
+
+It builds a throwaway world — two students, one tutor, two subjects, three
+lessons, two sets of notes — signs in as each person with a **real JWT through
+the anon key**, and asks the 24 questions that matter:
 
 - the student cannot see another student's lessons
 - the tutor cannot see a student they are not assigned to
@@ -189,9 +256,20 @@ rules.** Create one throwaway student and one throwaway tutor through
   permission error — the two must be indistinguishable
 - an unpublished write-up is invisible to the student
 - the tutor's private notes never appear on a student page
+- a student cannot promote themselves to admin
+- a signed-out stranger reads nothing at all
 
-The demo repository mirrors these rules and 25 automated checks cover them, but
-SQL is only truly tested by a database. Do this before real students exist.
+Nothing is checked through the service role, because the service role bypasses
+every policy and would pass no matter how wrong the rules were. Everything it
+creates it deletes, including when a check fails; the three accounts are
+throwaway and are removed on the way out.
+
+Exit code 0 means every rule held. Anything else means a student can see
+something they should not — fix the policy before real students exist.
+
+Worth re-running after any change to `supabase/migrations/*_rls.sql`. The demo
+repository mirrors these rules and the unit tests cover them, but RLS is SQL,
+and SQL is only truly tested by a database.
 
 ---
 
