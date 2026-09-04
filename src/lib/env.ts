@@ -74,6 +74,21 @@ export function isDemoMode(): boolean {
   return !(SUPABASE_URL && SUPABASE_ANON_KEY);
 }
 
+/**
+ * Whether the paid question banks and mock papers may be served at all.
+ *
+ * Demo mode has no authentication worth the name: its login page hands any role
+ * to anyone who clicks, and tutors pass the paid-content gate. A portal
+ * deployed without its Supabase secrets falls back to demo mode — so without
+ * this, a first deploy would publish every question and every paper to whoever
+ * picked the tutor account.
+ *
+ * Set PORTAL_DEMO_PAID_CONTENT=true to open it locally on purpose.
+ */
+export function paidContentAvailable(): boolean {
+  return !isDemoMode() || process.env.PORTAL_DEMO_PAID_CONTENT === "true";
+}
+
 export function isSupabaseConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 }

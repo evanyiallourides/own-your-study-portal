@@ -160,11 +160,26 @@ only means it handed the message over.
 Deliberately before the secrets, so you find out the deploy works while
 nothing sensitive is attached to it.
 
+**First, once per account:** the Worker binds a private R2 bucket for the paid
+question banks and mock papers, and R2 has to be switched on from the dashboard
+before anything can bind to it — the API cannot enable it.
+
+```
+dash.cloudflare.com -> R2 -> Enable
+```
+
+Then create the bucket and fill it:
+
 ```bash
 cd portal
 npx wrangler login
+npx wrangler r2 bucket create own-your-study-paid-content
+cd .. && ./tools/upload-paid-content.sh && cd portal
 npm run cf:deploy
 ```
+
+Without the bucket the deploy fails with `Please enable R2 through the
+Cloudflare Dashboard [code: 10042]`.
 
 `wrangler login` opens a browser to authorise your Cloudflare account.
 

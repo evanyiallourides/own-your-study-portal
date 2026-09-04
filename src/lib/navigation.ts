@@ -33,6 +33,8 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/student/homework", label: "Homework", icon: "checklist" },
     { href: "/student/progress", label: "Progress", icon: "chart" },
     { href: "/student/resources", label: "Resources", icon: "folder" },
+    { href: "/student/question-banks", label: "Question Banks", icon: "book" },
+    { href: "/student/papers", label: "Mock Papers", icon: "checklist" },
   ],
   tutor: [
     { href: "/tutor", label: "Home", icon: "home", exact: true },

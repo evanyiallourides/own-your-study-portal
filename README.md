@@ -189,7 +189,8 @@ supabase/migrations/
 ├── 20260825091000_rls.sql              helpers, policies, the student view
 ├── 20260825092000_storage.sql          the private bucket and its policies
 ├── 20260825093000_workflow.sql         publish_lesson and friends
-└── 20260826100000_google_calendar.sql  tutor Google connections, event ids
+├── 20260826100000_google_calendar.sql  tutor Google connections, event ids
+└── 20260903120000_question_banks.sql   question bank access, pooled hours
 ```
 
 With the Supabase CLI:
@@ -230,6 +231,63 @@ definer function (`tutor_teaches_student_subject`, `can_read_published_lesson`,
 and about a dozen more) makes the rules both terminating and predictable.
 
 ---
+
+## Question banks
+
+The IB question banks — 2,868 questions across fourteen banks, each with a full
+worked solution — are the paid half of what `ownyourstudy.com/own-your-ib`
+advertises. The marketing site publishes exactly one free question per bank and
+does not contain the rest; the portal serves the rest to students who are
+entitled to them.
+
+**Where the questions live.** `src/data/question-banks/` and `src/data/papers/`,
+imported by `src/lib/question-banks.ts` and `src/lib/papers.ts`. At 2 MB they
+sit well inside Vercel's 250 MB serverless budget, so there is no store to
+configure and no second place for the permission to be wrong.
+
+Inside `src/`, deliberately: Next publishes `public/` to the browser, so
+anything there is world-readable. Both modules are marked `server-only`, which
+turns an accidental import from a client component into a build error rather
+than a leak. Copy them in with `./tools/sync-portal-banks.sh` from the
+repository root after regenerating; that script also copies the two viewers into
+`public/question-bank/` and the stylesheet into `src/styles/`, so the portal
+cannot drift from the marketing site.
+
+> These briefly lived in a Cloudflare R2 bucket, on the mistaken belief that the
+> portal deployed to a Workers script capped at 3 MiB. It deploys to **Vercel**
+> — `wrangler.jsonc`, `open-next.config.ts` and the Cloudflare sections of this
+> file and the RUNBOOK describe a deployment that is not the live one. The R2
+> layer was solving a problem this deployment does not have.
+
+**Demo mode never serves it.** Demo mode has no authentication worth the name —
+its login page hands any role to anyone who clicks, and tutors pass the paid
+gate. Anything deployed without Supabase secrets falls back to demo mode, so
+without `paidContentAvailable()` in `src/lib/env.ts` such a deployment would
+publish every question and every paper to whoever picked the tutor account. Set
+`PORTAL_DEMO_PAID_CONTENT=true` to open it locally on purpose.
+
+**Who may read them.** `question_bank_access` records a subscription; the
+`has_question_bank_access()` function combines it with pooled hours, so there is
+one answer whoever asks:
+
+- an administrator grants it on the student's page, optionally with an expiry;
+- or the student has at least `app_settings.question_bank_free_hours` (20 by
+  default) hours of non-cancelled lessons booked, which is the promise the
+  pricing page already makes.
+
+There is no payments integration. When one arrives, its webhook writes this same
+table and nothing else changes.
+
+**What actually protects them** is `/api/question-banks/[file]`, which re-checks
+on every request. The page-level check only decides what the page *says* — a
+student who edits the markup in their browser gets a shelf they cannot load a
+single question from. Files are looked up in a fixed map, so a path with `../`
+in it is not a key rather than being a traversal to defend against.
+
+The viewer itself is the marketing site's `qbank.js`, served from
+`public/question-bank/` and mounted by `QuestionBankEmbed`. There is one
+implementation of the filtering, marking and progress logic; what differs in the
+portal is only where the data comes from.
 
 ## Seed data
 
@@ -842,6 +900,10 @@ to be one.
 - **Live whiteboard.** `FileList` renders boards as images and PDFs today. A
   tldraw canvas would slot in as another file category rendered by the same
   component.
+- **Paying for question bank access.** The entitlement is recorded and enforced;
+  taking the money is not. An administrator ticks the box when a subscription is
+  paid. A Stripe webhook writing `question_bank_access` is the whole of what
+  self-serve would add.
 - **Recurring lessons.** Google Calendar events are created one at a time; the
   API's `recurrence` field is where a weekly slot would go.
 - **Two-way calendar sync.** The portal writes to Google; it does not watch for

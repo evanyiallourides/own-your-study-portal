@@ -217,3 +217,47 @@ export async function inviteUser(input: z.input<typeof inviteSchema>): Promise<A
     return toActionError(error);
   }
 }
+
+/* --------------------------------------------------------------------------
+   Question bank access
+   -------------------------------------------------------------------------- */
+
+const questionBankSchema = z.object({
+  studentId: z.string().uuid(),
+  granted: z.boolean(),
+  /* An empty string from the date input means "no expiry", which is a real
+     choice and not a missing value — a subscription paid annually and a
+     licence included with a package look the same here apart from this. */
+  expiresAt: z.string().trim().optional(),
+  note: z.string().trim().max(300).optional(),
+});
+
+export async function setQuestionBankAccess(
+  input: z.input<typeof questionBankSchema>,
+): Promise<ActionResult> {
+  await requireRole("admin");
+  const parsed = questionBankSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That access change was not valid." };
+
+  const { studentId, granted, expiresAt, note } = parsed.data;
+
+  if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
+    return { ok: false, error: "That expiry date could not be read." };
+  }
+
+  try {
+    const repo = await getRepository();
+    await repo.setQuestionBankAccess(studentId, {
+      granted,
+      // Stored at the end of the chosen day: an expiry of "1 March" should mean
+      // the student still has it on 1 March.
+      expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59Z`).toISOString() : null,
+      note: note || null,
+    });
+    revalidatePath(`/admin/students/${studentId}`);
+    revalidatePath("/student/question-banks");
+    return { ok: true };
+  } catch (error) {
+    return toActionError(error);
+  }
+}

@@ -59,6 +59,27 @@ export interface Student {
   consent: StudentConsent;
 }
 
+/**
+ * Whether a student may read the full question banks, and why.
+ *
+ * `source` matters to the interface as much as `granted` does: "included with
+ * your 24 pooled hours" and "your subscription runs to March" are different
+ * sentences, and an administrator looking at a student needs to know which of
+ * the two they are looking at before changing anything.
+ */
+export interface QuestionBankAccess {
+  granted: boolean;
+  source: "subscription" | "pooled-hours" | "none";
+  expiresAt: string | null;
+  note: string | null;
+  grantedAt: string | null;
+  /** Hours booked and not cancelled, and the threshold they are measured against. */
+  pooledHours: number;
+  freeAtHours: number;
+  /** True when a subscription row exists at all, expired or not. */
+  hasSubscriptionRow: boolean;
+}
+
 export interface Tutor {
   id: string;
   profileId: string;
@@ -236,6 +257,8 @@ export interface AppSettings {
   requireGuardianConsentUnder18: boolean;
   transcriptRetentionDays: number;
   mediaRetentionHours: number;
+  /** Pooled tutoring hours at which the question banks are included. */
+  questionBankFreeHours: number;
 }
 
 /** Who is signed in, resolved once per request. */

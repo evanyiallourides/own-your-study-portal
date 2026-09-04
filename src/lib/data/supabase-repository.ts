@@ -57,6 +57,7 @@ import type {
   TopicProgress,
   Transcript,
   Tutor,
+  QuestionBankAccess,
 } from "@/lib/types";
 
 /* `students` holds two foreign keys to `profiles` — `profile_id` and
@@ -178,6 +179,70 @@ export class SupabaseRepository implements Repository {
     // stay that way — telling an unauthorised caller that a record exists is
     // itself a leak.
     return data ? mapStudent(data) : null;
+  }
+
+  /**
+   * Entitlement, resolved the same way the database resolves it.
+   *
+   * `has_question_bank_access()` is the authority — the API gate calls it too —
+   * but the interface also has to explain the answer, so the pieces behind it
+   * are read alongside: the subscription row if there is one, and the hours.
+   */
+  async getQuestionBankAccess(studentId: string): Promise<QuestionBankAccess> {
+    const [row, minutes, settings] = await Promise.all([
+      this.db
+        .from("question_bank_access")
+        .select("granted, expires_at, note, granted_at")
+        .eq("student_id", studentId)
+        .maybeSingle(),
+      this.db.rpc("student_pooled_minutes", { p_student_id: studentId }),
+      this.db.from("app_settings").select("question_bank_free_hours").maybeSingle(),
+    ]);
+
+    const pooledHours = Math.round(((minutes.data as number | null) ?? 0) / 6) / 10;
+    const freeAtHours =
+      (settings.data as { question_bank_free_hours?: number } | null)
+        ?.question_bank_free_hours ?? 20;
+
+    const sub = row.data as
+      | { granted: boolean; expires_at: string | null; note: string | null; granted_at: string }
+      | null;
+
+    const liveSubscription =
+      !!sub && sub.granted && (!sub.expires_at || new Date(sub.expires_at) > new Date());
+    const byHours = pooledHours >= freeAtHours;
+
+    return {
+      granted: liveSubscription || byHours,
+      // A paid subscription is named ahead of the hours when both apply: it is
+      // the one with an expiry date somebody may need to act on.
+      source: liveSubscription ? "subscription" : byHours ? "pooled-hours" : "none",
+      expiresAt: sub?.expires_at ?? null,
+      note: sub?.note ?? null,
+      grantedAt: sub?.granted_at ?? null,
+      pooledHours,
+      freeAtHours,
+      hasSubscriptionRow: !!sub,
+    };
+  }
+
+  async setQuestionBankAccess(
+    studentId: string,
+    input: { granted: boolean; expiresAt: string | null; note: string | null },
+  ): Promise<void> {
+    const { error } = await this.db.from("question_bank_access").upsert(
+      {
+        student_id: studentId,
+        granted: input.granted,
+        expires_at: input.expiresAt,
+        note: input.note,
+        granted_by: this.session.profile.id,
+      },
+      { onConflict: "student_id" },
+    );
+    // RLS restricts this to administrators, so a refusal here is the policy
+    // doing its job rather than a fault.
+    if (error) fail("Could not update question bank access", error);
   }
 
   async listTutors(search?: string): Promise<Tutor[]> {
@@ -682,6 +747,7 @@ export class SupabaseRepository implements Repository {
       requireGuardianConsentUnder18: data?.require_guardian_consent_under_18 !== false,
       transcriptRetentionDays: data?.transcript_retention_days ?? 365,
       mediaRetentionHours: data?.media_retention_hours ?? 24,
+      questionBankFreeHours: data?.question_bank_free_hours ?? 20,
     };
   }
 
@@ -692,6 +758,8 @@ export class SupabaseRepository implements Repository {
     if (patch.notetakerDisplayName !== undefined) row.notetaker_display_name = patch.notetakerDisplayName;
     if (patch.requireGuardianConsentUnder18 !== undefined)
       row.require_guardian_consent_under_18 = patch.requireGuardianConsentUnder18;
+    if (patch.questionBankFreeHours !== undefined)
+      row.question_bank_free_hours = patch.questionBankFreeHours;
     if (patch.transcriptRetentionDays !== undefined)
       row.transcript_retention_days = patch.transcriptRetentionDays;
     if (patch.mediaRetentionHours !== undefined) row.media_retention_hours = patch.mediaRetentionHours;

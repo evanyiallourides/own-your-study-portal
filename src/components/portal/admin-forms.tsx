@@ -13,9 +13,17 @@ import {
   setProfileActive,
   setSubjectArchived,
   updateSettings,
+  setQuestionBankAccess,
 } from "@/lib/actions/admin";
 import { ROLE_LABEL } from "@/lib/navigation";
-import type { AppSettings, Student, Subject, Tutor, UserRole } from "@/lib/types";
+import type {
+  AppSettings,
+  QuestionBankAccess,
+  Student,
+  Subject,
+  Tutor,
+  UserRole,
+} from "@/lib/types";
 
 /* -- shared plumbing ------------------------------------------------------ */
 
@@ -572,6 +580,106 @@ export function SettingsForm({ settings }: { settings: AppSettings }) {
 
       <Button type="submit" variant="solid" disabled={pending}>
         {pending ? "Saving…" : "Save settings"}
+      </Button>
+    </form>
+  );
+}
+
+/* -- question bank access -------------------------------------------------- */
+
+/**
+ * Grant, renew or revoke a student's question bank subscription.
+ *
+ * Pooled hours are shown but not editable: they are earned by the lessons on
+ * the books, and an administrator who wants to change that should book a lesson
+ * rather than type a number here. When the hours already cover it, the form
+ * says so and the switch becomes a way to add a paid subscription on top rather
+ * than the thing standing between the student and the banks.
+ */
+export function QuestionBankAccessForm({
+  studentId,
+  access,
+}: {
+  studentId: string;
+  access: QuestionBankAccess;
+}) {
+  const { pending, error, done, run } = useAction();
+  const [granted, setGranted] = useState(access.hasSubscriptionRow && access.source !== "none");
+  const [expiresAt, setExpiresAt] = useState(
+    access.expiresAt ? access.expiresAt.slice(0, 10) : "",
+  );
+  const [note, setNote] = useState(access.note ?? "");
+
+  const byHours = access.pooledHours >= access.freeAtHours;
+
+  return (
+    <form
+      className="space-y-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        run(
+          () => setQuestionBankAccess({ studentId, granted, expiresAt, note }),
+          granted ? "Question bank access saved." : "Question bank subscription removed.",
+        );
+      }}
+    >
+      <Feedback error={error} done={done} />
+
+      <div className="rounded-[8px] border border-rule bg-paper px-4 py-3">
+        <p className="text-sm text-ink">
+          <span className="font-medium">{access.pooledHours} pooled hours</span> booked, of{" "}
+          {access.freeAtHours} needed for the banks to be included.
+        </p>
+        {byHours ? (
+          <p className="mt-1 text-xs text-success">
+            Already included at no extra cost. A subscription below is not needed.
+          </p>
+        ) : null}
+      </div>
+
+      <label className="flex items-start gap-3 text-sm text-ink">
+        <input
+          type="checkbox"
+          checked={granted}
+          onChange={(e) => setGranted(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-accent"
+        />
+        <span>
+          Paid subscription active
+          <span className="block text-xs text-ink-300">
+            Tick when a question bank subscription has been paid for.
+          </span>
+        </span>
+      </label>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="block text-sm">
+          <span className="mb-1.5 block font-medium text-ink">Expires</span>
+          <input
+            type="date"
+            value={expiresAt}
+            disabled={!granted}
+            onChange={(e) => setExpiresAt(e.target.value)}
+            className="w-full rounded-[8px] border border-rule bg-white px-3 py-2 text-sm disabled:opacity-50"
+          />
+          <span className="mt-1 block text-xs text-ink-300">Leave empty for no expiry.</span>
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1.5 block font-medium text-ink">Note</span>
+          <input
+            type="text"
+            value={note}
+            disabled={!granted}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Invoice 204, paid 3 Sep"
+            className="w-full rounded-[8px] border border-rule bg-white px-3 py-2 text-sm disabled:opacity-50"
+          />
+        </label>
+      </div>
+
+      <Button type="submit" disabled={pending}>
+        {pending ? "Saving…" : "Save access"}
       </Button>
     </form>
   );

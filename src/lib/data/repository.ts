@@ -33,6 +33,7 @@ import type {
   TopicProgress,
   Transcript,
   Tutor,
+  QuestionBankAccess,
 } from "@/lib/types";
 
 export interface LessonFilter {
@@ -153,6 +154,13 @@ export interface Repository {
   setAssignmentActive(assignmentId: string, active: boolean): Promise<void>;
   listStudentSubjects(studentId: string): Promise<Subject[]>;
   addStudentSubject(studentId: string, subjectId: string): Promise<void>;
+
+  /* -- question banks -- */
+  getQuestionBankAccess(studentId: string): Promise<QuestionBankAccess>;
+  setQuestionBankAccess(
+    studentId: string,
+    input: { granted: boolean; expiresAt: string | null; note: string | null },
+  ): Promise<void>;
 
   /* -- lessons -- */
   listLessons(filter: LessonFilter): Promise<LessonWithContext[]>;

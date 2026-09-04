@@ -1,0 +1,1248 @@
+/* ==========================================================================
+   Own Your IB — Question Banks
+   Layered on styles.css: same navy/indigo/cream palette, same Fraunces + Inter.
+   Everything here is scoped to the two question-bank pages.
+   ========================================================================== */
+
+/* The `hidden` attribute is how this page shows and hides nearly everything,
+   and a class here that sets its own `display` silently beats it — the chips
+   are inline-flex and the option list is flex, so both went on rendering after
+   being hidden. Settle it once, for anything added later too. */
+[hidden] { display: none !important; }
+
+:root {
+  --qb-easy: #2f6b4f;
+  --qb-medium: #b4741d;
+  --qb-hard: #b3402f;
+  --qb-rail: 232px;
+  --qb-side: 268px;
+}
+
+/* ---------- Shared chips ---------- */
+.qb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--cream-dark);
+  color: var(--navy-700);
+  white-space: nowrap;
+}
+.qb-chip.calc { background: var(--gold-100); border-color: #d6d2ff; color: #4338ca; }
+.qb-chip.nocalc { background: #fdf0ee; border-color: #f2d6d0; color: var(--qb-hard); }
+.qb-chip.level { background: var(--navy-950); border-color: var(--navy-950); color: var(--gold-400); }
+
+/* Difficulty: a word plus five dots, filled to the question's level. */
+.qb-diff { display: inline-flex; align-items: center; gap: 9px; font-size: 0.76rem; font-weight: 700; }
+.qb-diff .dots { display: inline-flex; gap: 4px; }
+.qb-diff .dots i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--line);
+  display: block;
+}
+.qb-diff[data-band="Easy"] { color: var(--qb-easy); }
+.qb-diff[data-band="Medium"] { color: var(--qb-medium); }
+.qb-diff[data-band="Hard"] { color: var(--qb-hard); }
+.qb-diff[data-band="Easy"] .dots i.on { background: var(--qb-easy); }
+.qb-diff[data-band="Medium"] .dots i.on { background: var(--qb-medium); }
+.qb-diff[data-band="Hard"] .dots i.on { background: var(--qb-hard); }
+
+/* ==========================================================================
+   Index page — the shelf of banks
+   ========================================================================== */
+.qb-filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 34px;
+}
+.qb-filters .group {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.qb-pill {
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 8px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.qb-pill:hover { color: var(--navy-950); }
+.qb-pill[aria-pressed="true"] { background: var(--navy-950); color: var(--gold-400); }
+
+.qb-shelf { display: grid; gap: 24px; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 1000px) { .qb-shelf { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 660px) { .qb-shelf { grid-template-columns: 1fr; } }
+
+.qb-card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  position: relative;
+  overflow: hidden;
+}
+.qb-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--gold-400), var(--gold-500));
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.qb-card:hover { transform: translateY(-5px); box-shadow: var(--shadow-md); border-color: #d6d2ff; }
+.qb-card:hover::before { opacity: 1; }
+.qb-card .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.qb-card h3 { margin-bottom: 4px; font-size: 1.22rem; }
+.qb-card .paper {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--gold-500);
+  margin-bottom: 16px;
+}
+.qb-card .count {
+  font-family: "Fraunces", serif;
+  font-size: 2.1rem;
+  color: var(--navy-950);
+  line-height: 1;
+}
+.qb-card .count small {
+  display: block;
+  font-family: "Inter", sans-serif;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  font-weight: 500;
+  margin-top: 4px;
+}
+.qb-card ul.topics {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0 24px;
+  border-top: 1px solid var(--line);
+  flex-grow: 1;
+}
+.qb-card ul.topics li {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 0;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+}
+.qb-card ul.topics li b { color: var(--navy-900); font-weight: 600; }
+.qb-card ul.topics li span { color: var(--gold-500); font-weight: 700; flex-shrink: 0; }
+.qb-card .qb-progress { margin-bottom: 18px; }
+
+.qb-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--cream-dark);
+  overflow: hidden;
+}
+.qb-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--gold-400), var(--gold-500));
+  transition: width 0.3s ease;
+}
+.qb-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  margin-bottom: 7px;
+  font-weight: 500;
+}
+.qb-bar-label b { color: var(--navy-950); font-weight: 700; }
+
+.qb-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--ink-soft);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+}
+
+/* ==========================================================================
+   Viewer
+   ========================================================================== */
+.qb-app { background: var(--cream); padding: 0 0 90px; }
+
+/* Sticky bank bar under the site header */
+.qb-topbar {
+  position: sticky;
+  top: 73px;
+  z-index: 60;
+  background: rgba(250, 247, 241, 0.94);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.qb-topbar-in {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.qb-topbar .back {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.qb-topbar .back:hover { color: var(--gold-500); }
+.qb-topbar .title {
+  font-family: "Fraunces", serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--navy-950);
+}
+.qb-topbar .spacer { flex-grow: 1; }
+.qb-topbar .counter { font-size: 0.84rem; color: var(--ink-soft); font-weight: 500; }
+.qb-topbar .counter b { color: var(--navy-950); }
+
+.qb-filtertoggle {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--navy-950);
+  background: var(--white);
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.qb-filtertoggle[aria-expanded="true"] {
+  background: var(--navy-950);
+  border-color: var(--navy-950);
+  color: var(--gold-400);
+}
+@media (max-width: 1180px) { .qb-filtertoggle { display: inline-flex; } }
+
+.qb-layout {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 30px 28px 0;
+  display: grid;
+  grid-template-columns: var(--qb-side) minmax(0, 1fr) var(--qb-rail);
+  gap: 28px;
+  align-items: start;
+}
+/* One column below this. The question leads — the rail and the filters follow
+   it, rather than pushing it a screenful down the page. */
+@media (max-width: 1180px) {
+  .qb-layout { grid-template-columns: minmax(0, 1fr); }
+  .qb-side { order: 0; }
+  .qb-card-wrap { order: 1; }
+  .qb-rail { order: 2; }
+}
+
+/* ---------- Sidebar ---------- */
+.qb-side {
+  position: sticky;
+  top: 150px;
+  max-height: calc(100vh - 175px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+@media (max-width: 1180px) {
+  .qb-side {
+    position: static;
+    max-height: none;
+    display: none;
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 22px 4px;
+  }
+  .qb-side.open { display: block; }
+}
+/* styles.css gives every <section> 88px of vertical padding, which is right for
+   a page band and wrong for a sidebar group — it was adding 176px of dead space
+   to each one. */
+.qb-side section { padding: 0; }
+
+.qb-side h4 {
+  font-family: "Inter", sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+.qb-side section { margin-bottom: 26px; }
+
+.qb-topiclist { display: flex; flex-direction: column; gap: 2px; }
+.qb-topiclist button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  padding: 9px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+.qb-topiclist button:hover { background: var(--cream-dark); }
+.qb-topiclist button[aria-pressed="true"] {
+  background: var(--navy-950);
+  color: var(--cream);
+}
+.qb-topiclist button[aria-pressed="true"] em { color: var(--gold-400); }
+.qb-topiclist button span { flex-grow: 1; }
+.qb-topiclist button em {
+  font-style: normal;
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.qb-segment { display: flex; gap: 4px; background: var(--white); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+.qb-segment button {
+  flex: 1;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 7px 4px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.qb-segment button[aria-pressed="true"] { background: var(--navy-950); color: var(--gold-400); }
+
+.qb-select {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 0.87rem;
+  border-radius: 10px;
+  border: 1.5px solid var(--line);
+  background: var(--white);
+}
+
+/* ---------- The question card ---------- */
+.qb-card-wrap { min-width: 0; }
+
+.qb-question {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.qb-qhead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 26px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--cream), var(--white));
+  flex-wrap: wrap;
+}
+.qb-qhead .spacer { flex-grow: 1; }
+.qb-qnum {
+  font-family: "Fraunces", serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--navy-950);
+}
+.qb-qbody { padding: 34px 40px 38px; }
+@media (max-width: 640px) { .qb-qbody { padding: 26px 22px 30px; } }
+
+.qb-stem {
+  font-size: 1.06rem;
+  line-height: 1.75;
+  color: var(--ink);
+}
+.qb-stem p { color: var(--ink); margin: 0 0 0.9em; }
+.qb-stem p:last-child { margin-bottom: 0; }
+.qb-stem sub, .qb-stem sup { font-size: 0.72em; line-height: 0; }
+.qb-stem strong { color: var(--navy-950); font-weight: 600; }
+
+.qb-marks {
+  float: right;
+  margin-left: 18px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+/* Lettered parts, as they are printed on the paper */
+.qb-parts { list-style: none; padding: 0; margin: 22px 0 0; }
+.qb-parts li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 42px;
+  gap: 10px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+  align-items: baseline;
+  font-size: 1.02rem;
+  line-height: 1.7;
+}
+.qb-parts li .lab { font-weight: 600; color: var(--navy-950); }
+.qb-parts li .mk { text-align: right; font-size: 0.84rem; font-weight: 700; color: var(--ink-soft); }
+
+/* Multiple choice */
+.qb-options { list-style: none; padding: 0; margin: 24px 0 0; display: flex; flex-direction: column; gap: 10px; }
+.qb-options button {
+  display: flex;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  align-items: baseline;
+  font-family: inherit;
+  font-size: 0.99rem;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--white);
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 15px 18px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.qb-options button:hover:not([disabled]) { border-color: var(--gold-500); background: #fbfaff; }
+.qb-options button .key {
+  font-weight: 700;
+  color: var(--gold-500);
+  flex-shrink: 0;
+  width: 16px;
+}
+.qb-options button[disabled] { cursor: default; }
+.qb-options button.right {
+  border-color: var(--qb-easy);
+  background: #eef6f1;
+}
+.qb-options button.right .key { color: var(--qb-easy); }
+.qb-options button.wrong {
+  border-color: var(--qb-hard);
+  background: #fdf1ef;
+}
+.qb-options button.wrong .key { color: var(--qb-hard); }
+.qb-options button .verdict {
+  margin-left: auto;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.qb-options button.right .verdict { color: var(--qb-easy); }
+.qb-options button.wrong .verdict { color: var(--qb-hard); }
+
+/* Mark scheme drawer */
+.qb-scheme {
+  margin-top: 30px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold-500);
+  border-radius: 12px;
+  background: #fbfaff;
+  padding: 24px 26px;
+}
+.qb-scheme h4 {
+  font-family: "Inter", sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--gold-500);
+  margin: 0 0 14px;
+  font-weight: 700;
+}
+.qb-scheme .sol { font-size: 1rem; line-height: 1.8; color: var(--ink); }
+.qb-scheme .sol p { color: var(--ink); margin: 0 0 0.8em; }
+.qb-scheme .sol p:last-child { margin-bottom: 0; }
+.qb-scheme .sol strong { color: var(--navy-950); font-weight: 700; }
+.qb-scheme .sol sub, .qb-scheme .sol sup { font-size: 0.72em; line-height: 0; }
+.qb-scheme .qb-parts li { border-color: #e6e2ff; }
+.qb-scheme .caveat {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed #d6d2ff;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.qb-notes textarea {
+  min-height: 130px;
+  font-size: 0.93rem;
+  line-height: 1.6;
+}
+.qb-notes .saved { font-size: 0.76rem; color: var(--success); font-weight: 600; }
+
+/* Prev / next */
+.qb-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 22px;
+}
+.qb-nav .spacer { flex-grow: 1; }
+.qb-nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 12px 22px;
+  border-radius: 999px;
+  border: 1.5px solid var(--navy-700);
+  background: transparent;
+  color: var(--navy-950);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.qb-nav button:hover:not([disabled]) { border-color: var(--gold-500); color: var(--gold-500); }
+.qb-nav button[disabled] { opacity: 0.35; cursor: default; }
+.qb-nav button.next { background: var(--navy-950); border-color: var(--navy-950); color: var(--cream); }
+.qb-nav button.next:hover:not([disabled]) { background: var(--navy-800); color: var(--cream); }
+
+/* Question number grid */
+.qb-grid-wrap { margin-top: 40px; }
+.qb-grid-wrap h4 {
+  font-family: "Inter", sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+.qb-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.qb-grid button {
+  width: 38px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  position: relative;
+  transition: all 0.14s ease;
+}
+.qb-grid button:hover { border-color: var(--gold-500); color: var(--gold-500); }
+.qb-grid button.done { background: #eef6f1; border-color: #cfe4d8; color: var(--qb-easy); }
+.qb-grid button.marked::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--gold-500);
+}
+.qb-grid button.current {
+  background: var(--navy-950);
+  border-color: var(--navy-950);
+  color: var(--gold-400);
+}
+
+/* ---------- Right rail ---------- */
+.qb-rail {
+  position: sticky;
+  top: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+@media (max-width: 1180px) {
+  .qb-rail { position: static; flex-direction: row; flex-wrap: wrap; }
+  .qb-rail .qb-railbtn { flex: 1 1 190px; }
+  .qb-rail .qb-toolrow { flex-basis: 100%; }
+  .qb-rail .qb-reference { flex-basis: 100%; }
+}
+@media (max-width: 560px) {
+  .qb-rail .qb-railbtn { padding: 13px 14px; font-size: 0.86rem; }
+  .qb-rail .qb-railbtn .hint { display: none; }
+}
+
+.qb-toolrow {
+  display: flex;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.qb-toolrow button {
+  flex: 1;
+  border: none;
+  background: none;
+  padding: 13px 8px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.qb-toolrow button + button { border-left: 1px solid var(--line); }
+.qb-toolrow button:hover { background: var(--cream-dark); color: var(--navy-950); }
+.qb-toolrow button[aria-pressed="true"] { color: var(--gold-500); }
+.qb-toolrow button.done-btn[aria-pressed="true"] { color: var(--qb-easy); }
+.qb-toolrow svg { width: 20px; height: 20px; }
+
+.qb-railbtn {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--navy-950);
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 15px 17px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.qb-railbtn:hover { border-color: var(--gold-500); color: var(--gold-500); }
+.qb-railbtn svg { width: 18px; height: 18px; flex-shrink: 0; }
+.qb-railbtn[aria-expanded="true"] {
+  background: var(--gold-100);
+  border-color: #d6d2ff;
+  color: #4338ca;
+}
+.qb-railbtn .hint {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.qb-reference {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 6px 17px;
+  margin-top: 6px;
+}
+.qb-reference a,
+.qb-reference button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.87rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  padding: 13px 0;
+  cursor: pointer;
+}
+.qb-reference a + a,
+.qb-reference a + button,
+.qb-reference button + a { border-top: 1px solid var(--line); }
+.qb-reference a:hover, .qb-reference button:hover { color: var(--gold-500); }
+.qb-reference svg { width: 14px; height: 14px; margin-left: auto; flex-shrink: 0; }
+
+/* ---------- Drawer (how to use / about this bank) ---------- */
+.qb-sheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 26, 47, 0.5);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 200;
+}
+.qb-sheet[hidden] { display: none; }
+.qb-sheet .panel {
+  width: min(480px, 100%);
+  background: var(--cream);
+  height: 100%;
+  overflow-y: auto;
+  padding: 34px 34px 60px;
+  box-shadow: var(--shadow-lg);
+}
+.qb-sheet h3 { margin-bottom: 6px; }
+.qb-sheet .close {
+  float: right;
+  border: none;
+  background: none;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.qb-sheet .close:hover { color: var(--navy-950); }
+.qb-sheet dl { margin: 0; }
+.qb-sheet dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--gold-500);
+  font-weight: 700;
+  margin-top: 24px;
+}
+.qb-sheet dd { margin: 8px 0 0; font-size: 0.93rem; color: var(--ink-soft); line-height: 1.65; }
+.qb-sheet dd a { color: var(--gold-500); text-decoration: underline; word-break: break-all; }
+
+/* ---------- Loading / error ---------- */
+.qb-state {
+  text-align: center;
+  padding: 90px 20px;
+  color: var(--ink-soft);
+}
+.qb-state h2 { color: var(--navy-950); }
+
+/* The viewer is a working surface, so it prints as a clean question sheet. */
+@media print {
+  .site-header, .site-footer, .qb-topbar, .qb-side, .qb-rail,
+  .qb-nav, .qb-grid-wrap, .hamburger { display: none !important; }
+  .qb-layout { display: block; padding: 0; }
+  .qb-question { border: none; box-shadow: none; }
+}
+
+/* ==========================================================================
+   Gated banks
+   One free sample per bank; the rest is metadata only. Nothing here hides
+   content the browser already has — the locked questions genuinely are not in
+   the file, so what a student sees is what was sent.
+   ========================================================================== */
+
+.qb-chip.free {
+  background: #eef6f1;
+  border-color: #cfe4d8;
+  color: var(--qb-easy);
+}
+.qb-chip.locked {
+  background: var(--cream-dark);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+
+/* Placeholder bars, deliberately not fake sentences: the point is to show the
+   shape of what is missing, not to imitate it. */
+.qb-redact { margin: 26px 0 34px; display: flex; flex-direction: column; gap: 12px; }
+.qb-redact i {
+  display: block;
+  height: 13px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--cream-dark), #ece5d6);
+}
+.qb-redact i:nth-child(1) { width: 96%; }
+.qb-redact i:nth-child(2) { width: 88%; }
+.qb-redact i:nth-child(3) { width: 62%; }
+
+.qb-lockcta {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold-500);
+  border-radius: 12px;
+  background: #fbfaff;
+  padding: 28px 30px;
+}
+.qb-lockcta .icon {
+  width: 40px; height: 40px;
+  border-radius: 11px;
+  background: var(--gold-100);
+  border: 1px solid #d6d2ff;
+  display: flex; align-items: center; justify-content: center;
+  color: #4338ca;
+  margin-bottom: 16px;
+}
+.qb-lockcta .icon svg { width: 19px; height: 19px; }
+.qb-lockcta h3 { font-size: 1.15rem; margin-bottom: 8px; }
+.qb-lockcta p { font-size: 0.95rem; margin-bottom: 6px; }
+.qb-lockcta .facts {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin: 0 0 20px;
+}
+.qb-lockcta .facts b { color: var(--navy-950); font-weight: 600; }
+.qb-lockcta .actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.qb-lockcta .actions .link {
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--gold-500);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* Access panel, in the sidebar where progress sits on an unlocked bank */
+.qb-access {
+  background: var(--navy-950);
+  border-radius: var(--radius);
+  padding: 22px;
+  color: rgba(250, 247, 241, 0.75);
+}
+.qb-access h4 {
+  font-family: "Fraunces", serif;
+  font-size: 1.02rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--cream);
+  margin-bottom: 8px;
+}
+.qb-access p { font-size: 0.85rem; color: rgba(250, 247, 241, 0.7); margin-bottom: 16px; }
+.qb-access p b { color: var(--gold-400); }
+.qb-access .btn { width: 100%; }
+.qb-access .under {
+  display: block;
+  text-align: center;
+  font-size: 0.78rem;
+  margin-top: 12px;
+  color: rgba(250, 247, 241, 0.6);
+  text-decoration: underline;
+}
+.qb-access .under:hover { color: var(--gold-400); }
+
+/* Locked numbers stay legible — the grid is how a student sees the size of
+   what they would be buying. */
+.qb-grid button.locked { background: var(--cream-dark); color: #9aa4b2; border-style: dashed; }
+.qb-grid button.locked:hover { border-color: var(--gold-500); color: var(--gold-500); }
+.qb-grid button.sample {
+  background: #eef6f1;
+  border-color: var(--qb-easy);
+  color: var(--qb-easy);
+}
+.qb-grid button.sample.current, .qb-grid button.current { background: var(--navy-950); border-color: var(--navy-950); color: var(--gold-400); }
+
+.qb-railbtn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.qb-railbtn[disabled]:hover { border-color: var(--line); color: var(--navy-950); }
+.qb-railbtn.unlock {
+  background: linear-gradient(135deg, var(--gold-400), var(--gold-500));
+  border-color: transparent;
+  color: var(--cream);
+  justify-content: center;
+}
+.qb-railbtn.unlock:hover { color: var(--cream); border-color: transparent; filter: brightness(1.06); }
+
+/* Shelf card: what the free sample buys you a look at */
+.qb-card .sample-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--qb-easy);
+  margin-bottom: 16px;
+}
+.qb-card .sample-line svg { width: 14px; height: 14px; }
+.qb-card .sample-line span { color: var(--ink-soft); font-weight: 500; }
+
+/* ==========================================================================
+   Command terms, variants and mark-loss guidance
+   ========================================================================== */
+
+.qb-chip.term {
+  background: var(--gold-100);
+  border-color: #d6d2ff;
+  color: #4338ca;
+  letter-spacing: 0.06em;
+}
+.qb-chip.variant { background: var(--white); }
+
+/* Sibling investigations: the same task with different numbers. Saying so
+   turns a bank that looks repetitive into one that is deliberately drillable. */
+.qb-variants {
+  margin: 14px 0 0;
+  padding: 12px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--cream);
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+.qb-variants b { color: var(--navy-950); font-weight: 600; }
+.qb-variants button {
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--gold-500);
+  cursor: pointer;
+  padding: 0 3px;
+  text-decoration: underline;
+}
+
+/* Where marks go — our guidance, keyed to the command term */
+.qb-guide .row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 14px; padding: 13px 0; }
+.qb-guide .row + .row { border-top: 1px solid #e6e2ff; }
+.qb-guide .row dt {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding-top: 2px;
+}
+.qb-guide .row.earn dt { color: var(--qb-easy); }
+.qb-guide .row.lose dt { color: var(--qb-hard); }
+.qb-guide .row dd { margin: 0; font-size: 0.95rem; line-height: 1.65; color: var(--ink); }
+.qb-guide .whose {
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px dashed #d6d2ff;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+/* Why the mark was lost — the source banks' own taxonomy */
+.qb-reasons { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
+.qb-reasons button {
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--white);
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.qb-reasons button:hover { border-color: var(--gold-500); color: var(--gold-500); }
+.qb-reasons button[aria-pressed="true"] {
+  background: var(--navy-950);
+  border-color: var(--navy-950);
+  color: var(--gold-400);
+}
+.qb-notes .prompt { font-size: 0.84rem; color: var(--ink-soft); margin-bottom: 4px; }
+
+/* "Refreshed": say when, rather than claiming a cadence */
+.qb-built {
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  text-align: center;
+  margin-top: 14px;
+}
+/* .count sets line-height 1 and its <small> hangs below the number, so this
+   needs real space above it rather than the negative pull it started with. */
+.qb-card .built { font-size: 0.72rem; color: var(--ink-soft); margin: 10px 0 0; }
+
+/* The samples strip on the resources page */
+.qb-samples { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 22px 0 0; }
+@media (max-width: 900px) { .qb-samples { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .qb-samples { grid-template-columns: 1fr; } }
+.qb-samples a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: all 0.16s ease;
+}
+.qb-samples a:hover { border-color: var(--gold-500); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.qb-samples a b { font-size: 0.86rem; color: var(--navy-950); font-weight: 600; }
+.qb-samples a span { font-size: 0.76rem; color: var(--ink-soft); }
+.qb-samples a em {
+  font-style: normal;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--qb-easy);
+  letter-spacing: 0.04em;
+}
+
+/* ==========================================================================
+   Mock papers
+   A paper is sat, not drilled: one long page, a clock, and a mark at the end.
+   Shares the banks' palette and chips; the layout is its own.
+   ========================================================================== */
+
+.pp-shelf { display: grid; gap: 18px; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 1050px) { .pp-shelf { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 680px) { .pp-shelf { grid-template-columns: 1fr; } }
+
+.pp-card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.pp-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); border-color: #d6d2ff; }
+.pp-card .meta { display: flex; gap: 7px; flex-wrap: wrap; }
+.pp-card h3 { font-size: 1.05rem; margin: 2px 0 0; }
+.pp-card .sub { font-size: 0.84rem; color: var(--gold-500); font-weight: 600; }
+.pp-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 10px;
+  margin: 8px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.pp-card dt {
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+.pp-card dd { margin: 0; font-family: "Fraunces", serif; font-size: 1.1rem; color: var(--navy-950); }
+.pp-card .btn { margin-top: 12px; }
+
+/* ---------- Sitting a paper ---------- */
+.pp-app { max-width: 900px; margin: 0 auto; padding: 30px 28px 90px; }
+
+.pp-head {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 26px 30px;
+  box-shadow: var(--shadow-sm);
+}
+.pp-head h1 { font-size: 1.6rem; margin-bottom: 4px; }
+.pp-head .sub { color: var(--gold-500); font-weight: 600; font-size: 0.92rem; margin-bottom: 16px; }
+.pp-head .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.pp-head .rules { font-size: 0.88rem; color: var(--ink-soft); margin: 0; }
+
+/* The clock. A mock that is not timed is just a worksheet. */
+.pp-timer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.pp-clock {
+  font-family: "Fraunces", serif;
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--navy-950);
+  line-height: 1;
+  min-width: 128px;
+}
+.pp-clock.low { color: var(--qb-hard); }
+.pp-clock.over { color: var(--qb-hard); }
+.pp-timer .note { font-size: 0.8rem; color: var(--ink-soft); flex-basis: 100%; margin: 0; }
+.pp-timer button {
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1.5px solid var(--navy-700);
+  background: transparent;
+  color: var(--navy-950);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.pp-timer button:hover { border-color: var(--gold-500); color: var(--gold-500); }
+.pp-timer button.go { background: var(--navy-950); border-color: var(--navy-950); color: var(--cream); }
+.pp-timer button.go:hover { background: var(--navy-800); color: var(--cream); }
+
+.pp-section {
+  margin: 40px 0 18px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--navy-950);
+  font-family: "Fraunces", serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--navy-950);
+}
+
+.pp-q {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 26px 30px;
+  margin-bottom: 16px;
+}
+@media (max-width: 640px) { .pp-q { padding: 20px 18px; } .pp-app { padding: 20px 16px 70px; } }
+.pp-q header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.pp-q header .n { font-family: "Fraunces", serif; font-weight: 600; font-size: 1.05rem; color: var(--navy-950); }
+.pp-q header .marks { margin-left: auto; font-size: 0.82rem; font-weight: 700; color: var(--ink-soft); }
+.pp-q h3 { font-size: 1.02rem; margin: 0 0 10px; }
+.pp-q .stem { font-size: 1rem; line-height: 1.72; color: var(--ink); }
+.pp-q .stem p { color: var(--ink); margin: 0 0 0.8em; }
+.pp-q sub, .pp-q sup { font-size: 0.72em; line-height: 0; }
+
+/* Data tables, as printed on the paper */
+.pp-table-wrap { overflow-x: auto; margin: 16px 0; }
+.pp-table { border-collapse: collapse; font-size: 0.9rem; min-width: 100%; }
+.pp-table th, .pp-table td {
+  border: 1px solid var(--line);
+  padding: 8px 14px;
+  text-align: left;
+  white-space: nowrap;
+}
+.pp-table thead th { background: var(--cream-dark); font-weight: 600; color: var(--navy-950); }
+
+.pp-parts { list-style: none; padding: 0; margin: 16px 0 0; }
+.pp-parts li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 40px;
+  gap: 10px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+  align-items: baseline;
+  line-height: 1.7;
+}
+.pp-parts .lab { font-weight: 600; color: var(--navy-950); }
+.pp-parts .mk { text-align: right; font-size: 0.82rem; font-weight: 700; color: var(--ink-soft); }
+
+.pp-options { list-style: none; padding: 0; margin: 14px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.pp-options button {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  align-items: baseline;
+  font-family: inherit;
+  font-size: 0.97rem;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--white);
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+.pp-options button:hover { border-color: var(--gold-500); }
+.pp-options button .key { font-weight: 700; color: var(--gold-500); width: 15px; flex-shrink: 0; }
+.pp-options button[aria-pressed="true"] { border-color: var(--navy-950); background: var(--cream); }
+.pp-options button.right { border-color: var(--qb-easy); background: #eef6f1; }
+.pp-options button.right .key { color: var(--qb-easy); }
+.pp-options button.wrong { border-color: var(--qb-hard); background: #fdf1ef; }
+.pp-options button.wrong .key { color: var(--qb-hard); }
+
+/* Marking */
+.pp-mark {
+  margin-top: 20px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold-500);
+  border-radius: 10px;
+  background: #fbfaff;
+  padding: 20px 22px;
+}
+.pp-mark h4 {
+  font-family: "Inter", sans-serif;
+  font-size: 0.68rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--gold-500);
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+.pp-mark .sol { font-size: 0.97rem; line-height: 1.75; color: var(--ink); }
+.pp-mark .sol p { color: var(--ink); margin: 0 0 0.7em; }
+.pp-mark .pp-parts li { border-color: #e6e2ff; }
+
+.pp-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed #d6d2ff;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+  flex-wrap: wrap;
+}
+.pp-score input {
+  width: 68px;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  text-align: center;
+}
+.pp-q .reveal {
+  margin-top: 18px;
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--gold-500);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Running total, pinned while you mark */
+.pp-total {
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
+  margin-top: 26px;
+  background: var(--navy-950);
+  color: var(--cream);
+  border-radius: var(--radius);
+  padding: 18px 24px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  box-shadow: var(--shadow-lg);
+}
+.pp-total b { font-family: "Fraunces", serif; font-size: 1.5rem; color: var(--gold-400); }
+.pp-total .pct { font-size: 0.88rem; color: rgba(250,247,241,0.72); }
+.pp-total .spacer { flex-grow: 1; }
+.pp-total button {
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255,255,255,0.3);
+  background: transparent;
+  color: var(--cream);
+  cursor: pointer;
+}
+.pp-total button:hover { border-color: var(--gold-400); color: var(--gold-400); }
+
+@media print {
+  .pp-timer, .pp-total, .pp-q .reveal, .pp-mark { display: none !important; }
+}

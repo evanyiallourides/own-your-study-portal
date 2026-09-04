@@ -37,6 +37,7 @@
     "binding": "ASSETS"
   },
 
+
   /* The Worker calls itself for cache revalidation. Named the same as `name`
      above; if you rename the Worker, rename it here too. */
   "services": [

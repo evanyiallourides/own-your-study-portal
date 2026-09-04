@@ -64,6 +64,11 @@ interface DemoState {
   homework: HomeworkItem[];
   progress: TopicProgress[];
   notifications: Notification[];
+  /** Question bank subscriptions, keyed by student id. */
+  questionBankAccess: Record<
+    string,
+    { granted: boolean; expiresAt: string | null; note: string | null; grantedAt: string }
+  >;
   settings: AppSettings;
   /** The calendar day the dates above were resolved against. */
   seededOn: string;
@@ -87,12 +92,16 @@ function seed(): DemoState {
     homework: clone(DEMO_HOMEWORK),
     progress: clone(DEMO_PROGRESS),
     notifications: clone(DEMO_NOTIFICATIONS),
+    // Empty on purpose: the demo student earns access through pooled hours,
+    // which exercises the more interesting of the two routes in.
+    questionBankAccess: {},
     settings: {
       notetakerEnabledGlobally: true,
       notetakerDisplayName: "Own Your Study AI Notetaker",
       requireGuardianConsentUnder18: true,
       transcriptRetentionDays: 365,
       mediaRetentionHours: 24,
+      questionBankFreeHours: 20,
     },
   };
 }

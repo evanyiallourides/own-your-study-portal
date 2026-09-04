@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { LessonCard } from "@/components/portal/lesson-cards";
-import { ToggleAssignmentButton } from "@/components/portal/admin-forms";
+import {
+  QuestionBankAccessForm,
+  ToggleAssignmentButton,
+} from "@/components/portal/admin-forms";
 import { ChevronLeftIcon } from "@/components/ui/icons";
 import { Avatar, Badge, Card, KeyValue, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
@@ -24,10 +27,11 @@ export default async function AdminStudentPage({
   const student = await repo.getStudent(studentId);
   if (!student) notFound();
 
-  const [assignments, subjects, lessons] = await Promise.all([
+  const [assignments, subjects, lessons, questionBanks] = await Promise.all([
     repo.listAssignments({ studentId }),
     repo.listStudentSubjects(studentId),
     repo.listLessons({ studentId, order: "desc", limit: 20 }),
+    repo.getQuestionBankAccess(studentId),
   ]);
 
   const consent = student.consent;
@@ -110,6 +114,22 @@ export default async function AdminStudentPage({
             required, by their guardian — and you should keep your own record of how it was
             obtained.
           </p>
+        </Card>
+      </section>
+
+      <section>
+        <SectionHead
+          title="Question banks"
+          description={
+            questionBanks.granted
+              ? questionBanks.source === "pooled-hours"
+                ? "Included with this student's pooled hours."
+                : "Active by subscription."
+              : "Not available to this student yet."
+          }
+        />
+        <Card>
+          <QuestionBankAccessForm studentId={studentId} access={questionBanks} />
         </Card>
       </section>
 

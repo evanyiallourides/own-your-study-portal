@@ -39,6 +39,7 @@ import type {
   TopicProgress,
   Transcript,
   Tutor,
+  QuestionBankAccess,
 } from "@/lib/types";
 
 const STUDENT_VISIBLE_UNPUBLISHED: LessonStatus[] = ["scheduled", "in_progress", "cancelled"];
@@ -187,6 +188,57 @@ export class DemoRepository implements Repository {
   async getStudent(studentId: string): Promise<Student | null> {
     if (!this.canSeeStudent(studentId)) return null;
     return demoState.students.find((s) => s.id === studentId) ?? null;
+  }
+
+  /** The same two rules as the database, over the in-memory store. */
+  async getQuestionBankAccess(studentId: string): Promise<QuestionBankAccess> {
+    if (!this.canSeeStudent(studentId)) {
+      return {
+        granted: false,
+        source: "none",
+        expiresAt: null,
+        note: null,
+        grantedAt: null,
+        pooledHours: 0,
+        freeAtHours: demoState.settings.questionBankFreeHours,
+        hasSubscriptionRow: false,
+      };
+    }
+
+    const minutes = demoState.lessons
+      .filter((l) => l.studentId === studentId && l.status !== "cancelled")
+      .reduce((total, l) => total + l.durationMinutes, 0);
+    const pooledHours = Math.round(minutes / 6) / 10;
+    const freeAtHours = demoState.settings.questionBankFreeHours;
+
+    const sub = demoState.questionBankAccess[studentId] ?? null;
+    const liveSubscription =
+      !!sub && sub.granted && (!sub.expiresAt || new Date(sub.expiresAt) > new Date());
+    const byHours = pooledHours >= freeAtHours;
+
+    return {
+      granted: liveSubscription || byHours,
+      source: liveSubscription ? "subscription" : byHours ? "pooled-hours" : "none",
+      expiresAt: sub?.expiresAt ?? null,
+      note: sub?.note ?? null,
+      grantedAt: sub?.grantedAt ?? null,
+      pooledHours,
+      freeAtHours,
+      hasSubscriptionRow: !!sub,
+    };
+  }
+
+  async setQuestionBankAccess(
+    studentId: string,
+    input: { granted: boolean; expiresAt: string | null; note: string | null },
+  ): Promise<void> {
+    this.requireAdmin();
+    demoState.questionBankAccess[studentId] = {
+      granted: input.granted,
+      expiresAt: input.expiresAt,
+      note: input.note,
+      grantedAt: new Date().toISOString(),
+    };
   }
 
   async listTutors(search?: string): Promise<Tutor[]> {

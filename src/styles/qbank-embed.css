@@ -1,0 +1,80 @@
+/* ==========================================================================
+   The question bank viewer, inside the portal
+   ==========================================================================
+
+   qbank.css is written for the marketing site and names its colours after that
+   stylesheet's variables. The portal is the same brand under different names —
+   --color-ink is the same navy, --color-accent the same indigo — so this maps
+   one onto the other rather than keeping a second palette that could drift.
+
+   Everything is scoped to .qb-embed. The only rules qbank.css leaves unscoped
+   are its :root variable declarations, which do not collide with anything the
+   portal defines, and [hidden] { display: none }, which the portal wants too.
+   ========================================================================== */
+
+.qb-embed {
+  --navy-950: var(--color-ink);
+  --navy-900: #17233d;
+  --navy-800: #1d2c4a;
+  --navy-700: #263a5e;
+  --navy-600: #34497a;
+  --gold-500: var(--color-accent);
+  --gold-400: var(--color-accent-soft);
+  --gold-100: var(--color-accent-wash);
+  --cream: var(--color-paper);
+  --cream-dark: #f1ebdf;
+  --ink: var(--color-ink);
+  --ink-soft: #4a5a6d;
+  --line: var(--color-rule);
+  --white: #ffffff;
+  --success: var(--color-success);
+  --radius: 14px;
+  --radius-lg: var(--radius-lg, 22px);
+  --maxw: 1180px;
+
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+
+.qb-embed h1,
+.qb-embed h2,
+.qb-embed h3,
+.qb-embed h4 {
+  font-family: var(--font-display);
+}
+
+/* The portal supplies its own page chrome and its own scroll container, so the
+   viewer's sticky bar and full-bleed background are handed back. */
+.qb-embed .qb-app { background: transparent; padding-bottom: 0; }
+.qb-embed .qb-topbar {
+  position: static;
+  background: transparent;
+  backdrop-filter: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+}
+.qb-embed .qb-topbar-in { padding: 12px 18px; }
+.qb-embed .qb-layout { padding: 0; gap: 24px; }
+.qb-embed .qb-side,
+.qb-embed .qb-rail { top: 24px; }
+
+/* The shelf on its own page inside the portal: no hero above it, so the cards
+   start at the top of the content column. */
+.qb-embed .qb-shelf { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 1500px) {
+  .qb-embed .qb-shelf { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 780px) {
+  .qb-embed .qb-shelf { grid-template-columns: 1fr; }
+}
+
+/* Inside the portal every bank is unlocked, so the marketing calls to action
+   the viewer would otherwise draw have nothing to sell. */
+/* "Free" only means something next to a price. Inside the portal every paper
+   and every bank is already open, so the chip would label all of them. */
+.qb-embed .qb-chip.free,
+.qb-embed .qb-access,
+.qb-embed .qb-lockcta .actions .btn,
+.qb-embed .qb-railbtn.unlock,
+.qb-embed .qb-samples { display: none !important; }
