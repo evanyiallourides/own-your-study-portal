@@ -10,6 +10,7 @@ import {
 } from "@/lib/payments/entitlements";
 import { enrolPaidBuyer, resolveStudent } from "@/lib/payments/enrolment";
 import { capInstalmentPlan } from "@/lib/payments/instalments";
+import { writeOrderColumns } from "@/lib/payments/order-writes";
 import { stripeClient, stripeConfigured } from "@/lib/payments/stripe";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -395,12 +396,27 @@ export async function POST(request: NextRequest) {
     if (plan.countsInstalment) updates.instalments_paid = order.instalmentsPaid + 1;
     if (typeof plan.taxMinor === "number") updates.tax_amount_minor = plan.taxMinor;
 
-    if (Object.keys(updates).length > 0) {
-      // The two student_*_given values are how the custom fields travel between
-      // the blocks above; they are not columns and must not reach the update.
-      const { student_name_given: _n, student_email_given: _e, ...columns } = updates;
-      if (Object.keys(columns).length > 0) {
-        await db.from("orders").update(columns).eq("id", orderId);
+    // The two student_*_given values are how the custom fields travel between
+    // the blocks above; they are not columns and must not reach the update.
+    const { student_name_given: _n, student_email_given: _e, ...columns } = updates;
+
+    if (Object.keys(columns).length > 0) {
+      const written = await writeOrderColumns(db, orderId, columns);
+
+      if (written.skipped.length > 0) {
+        // The schema is behind the code. The rest of the order was still
+        // recorded, which is the point, but somebody should run the migration.
+        console.warn(
+          `[stripe] order ${orderId}: database has no ${written.skipped.join(", ")} — ` +
+            "wrote the rest. A migration is outstanding.",
+        );
+      }
+
+      if (written.error) {
+        // Previously this error was not looked at, so a failed write left a
+        // paid order sitting at 'pending' with nothing to say why.
+        await finish("failed", `Could not update the order: ${written.error}`, orderId);
+        return NextResponse.json({ ok: true, recorded: false });
       }
     }
 
