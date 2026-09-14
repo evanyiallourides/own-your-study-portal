@@ -14,6 +14,9 @@
    ========================================================================== */
 
 import type {
+  Order,
+  OrderPayment,
+  OrderStatus,
   AppSettings,
   Assignment,
   HomeworkItem,
@@ -161,6 +164,15 @@ export interface Repository {
     studentId: string,
     input: { granted: boolean; expiresAt: string | null; note: string | null },
   ): Promise<void>;
+
+  /* -- orders -- */
+  listOrders(filter?: { status?: OrderStatus[]; unmatchedOnly?: boolean }): Promise<Order[]>;
+  listOrdersForStudent(studentId: string): Promise<Order[]>;
+  getOrderPayments(orderId: string): Promise<OrderPayment[]>;
+  /** Attach a paid order to a student and apply whatever it granted. */
+  linkOrderToStudent(orderId: string, studentId: string): Promise<void>;
+  /** Detach it again, for a link made to the wrong person. */
+  unlinkOrder(orderId: string): Promise<void>;
 
   /* -- lessons -- */
   listLessons(filter: LessonFilter): Promise<LessonWithContext[]>;

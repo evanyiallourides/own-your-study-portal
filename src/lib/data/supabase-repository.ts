@@ -40,6 +40,9 @@ import {
   mapTutor,
 } from "@/lib/data/mappers";
 import type {
+  Order,
+  OrderPayment,
+  OrderStatus,
   AppSettings,
   Assignment,
   HomeworkItem,
@@ -224,6 +227,119 @@ export class SupabaseRepository implements Repository {
       freeAtHours,
       hasSubscriptionRow: !!sub,
     };
+  }
+
+  /* -- orders ------------------------------------------------------------
+     RLS restricts these to administrators, so the filtering here is for the
+     screen rather than for safety. The unmatched case is deliberately a
+     `student_id is null` test rather than a join: an order with no student is
+     the thing being looked for, not a missing row. */
+
+  private orderFrom(row: Record<string, unknown>): Order {
+    const student = row.students as { profiles?: { first_name?: string; last_name?: string } } | null;
+    const profile = student?.profiles;
+    const name = profile ? `${profile.first_name ?? ""} ${profile.last_name ?? ""}`.trim() : "";
+    return {
+      id: row.id as string,
+      provider: (row.provider as string) ?? "stripe",
+      skuSlug: row.sku_slug as string,
+      skuName: row.sku_name as string,
+      plan: row.plan === "instalments" ? "instalments" : "full",
+      quantity: (row.quantity as number) ?? 1,
+      instalmentMonths: (row.instalment_months as number | null) ?? null,
+      instalmentsPaid: (row.instalments_paid as number) ?? 0,
+      currency: (row.currency as string) ?? "usd",
+      amountTotalMinor: (row.amount_total_minor as number) ?? 0,
+      amountPaidMinor: (row.amount_paid_minor as number) ?? 0,
+      taxAmountMinor: (row.tax_amount_minor as number) ?? 0,
+      status: row.status as Order["status"],
+      buyerEmail: (row.buyer_email as string) ?? "",
+      buyerName: (row.buyer_name as string | null) ?? null,
+      buyerCountry: (row.buyer_country as string | null) ?? null,
+      sourceSite: (row.source_site as string | null) ?? null,
+      studentId: (row.student_id as string | null) ?? null,
+      studentName: name || null,
+      claimedAt: (row.claimed_at as string | null) ?? null,
+      note: (row.note as string | null) ?? null,
+      createdAt: row.created_at as string,
+      grantsQuestionBankDays: (row.grants_question_bank_days as number | null) ?? null,
+    };
+  }
+
+  private static readonly ORDER_COLUMNS =
+    "id, provider, sku_slug, sku_name, plan, quantity, instalment_months, instalments_paid, currency, amount_total_minor, amount_paid_minor, tax_amount_minor, status, buyer_email, buyer_name, buyer_country, source_site, student_id, claimed_at, note, created_at, grants_question_bank_days, students ( profiles ( first_name, last_name ) )";
+
+  async listOrders(filter?: { status?: OrderStatus[]; unmatchedOnly?: boolean }): Promise<Order[]> {
+    let query = this.db
+      .from("orders")
+      .select(SupabaseRepository.ORDER_COLUMNS)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (filter?.status?.length) query = query.in("status", filter.status);
+    if (filter?.unmatchedOnly) query = query.is("student_id", null);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((row) => this.orderFrom(row as unknown as Record<string, unknown>));
+  }
+
+  async listOrdersForStudent(studentId: string): Promise<Order[]> {
+    const { data, error } = await this.db
+      .from("orders")
+      .select(SupabaseRepository.ORDER_COLUMNS)
+      .eq("student_id", studentId)
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((row) => this.orderFrom(row as unknown as Record<string, unknown>));
+  }
+
+  async getOrderPayments(orderId: string): Promise<OrderPayment[]> {
+    const { data, error } = await this.db
+      .from("order_payments")
+      .select("id, kind, amount_minor, currency, occurred_at, detail")
+      .eq("order_id", orderId)
+      .order("occurred_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => ({
+      id: r.id as string,
+      kind: r.kind as OrderPayment["kind"],
+      amountMinor: r.amount_minor as number,
+      currency: r.currency as string,
+      occurredAt: r.occurred_at as string,
+      detail: (r.detail as string | null) ?? null,
+    }));
+  }
+
+  async linkOrderToStudent(orderId: string, studentId: string): Promise<void> {
+    // Attach first, then let the SQL function apply whatever the order granted.
+    // The rule about a renewal extending rather than resetting lives there, and
+    // restating it here would give two answers to one question.
+    const { error } = await this.db
+      .from("orders")
+      .update({ student_id: studentId, claimed_at: new Date().toISOString() })
+      .eq("id", orderId);
+    if (error) throw new Error(error.message);
+
+    const { data: student } = await this.db
+      .from("students")
+      .select("profile_id")
+      .eq("id", studentId)
+      .maybeSingle();
+    const profileId = (student as { profile_id?: string } | null)?.profile_id;
+    if (profileId) {
+      await this.db.rpc("claim_orders_for_profile", { p_profile_id: profileId });
+    }
+  }
+
+  async unlinkOrder(orderId: string): Promise<void> {
+    // Deliberately does not revoke anything. Access may also be earned through
+    // pooled hours, and taking it away here would be guessing.
+    const { error } = await this.db
+      .from("orders")
+      .update({ student_id: null, claimed_at: null, claimed_by: null })
+      .eq("id", orderId);
+    if (error) throw new Error(error.message);
   }
 
   async setQuestionBankAccess(

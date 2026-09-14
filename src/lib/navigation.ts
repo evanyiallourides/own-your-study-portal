@@ -50,6 +50,7 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/admin/subjects", label: "Subjects", icon: "book" },
     { href: "/admin/lessons", label: "Lessons", icon: "calendar" },
     { href: "/admin/assignments", label: "Assignments", icon: "checklist" },
+    { href: "/admin/orders", label: "Orders", icon: "chart" },
     { href: "/admin/notetaker", label: "AI Notetaker", icon: "spark" },
     { href: "/admin/settings", label: "Settings", icon: "settings" },
   ],

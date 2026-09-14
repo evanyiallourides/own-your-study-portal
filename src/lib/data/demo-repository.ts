@@ -21,6 +21,9 @@ import {
   type UploadFileInput,
 } from "@/lib/data/repository";
 import type {
+  Order,
+  OrderPayment,
+  OrderStatus,
   AppSettings,
   Assignment,
   HomeworkItem,
@@ -191,6 +194,90 @@ export class DemoRepository implements Repository {
   }
 
   /** The same two rules as the database, over the in-memory store. */
+  /* -- orders ------------------------------------------------------------
+     Restates in TypeScript what RLS enforces in SQL: administrators see
+     everything, a student sees their own, a parent sees their children's, and
+     a tutor sees none — billing is not a tutor's business. */
+
+  private visibleOrders(): Order[] {
+    if (this.session.profile.role === "admin") return demoState.orders;
+    if (this.session.profile.role === "tutor") return [];
+    return demoState.orders.filter(
+      (o) => o.studentId !== null && this.canSeeStudent(o.studentId),
+    );
+  }
+
+  async listOrders(filter?: { status?: OrderStatus[]; unmatchedOnly?: boolean }): Promise<Order[]> {
+    let rows = this.visibleOrders();
+    if (filter?.status?.length) rows = rows.filter((o) => filter.status!.includes(o.status));
+    if (filter?.unmatchedOnly) rows = rows.filter((o) => o.studentId === null);
+    return [...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listOrdersForStudent(studentId: string): Promise<Order[]> {
+    if (!this.canSeeStudent(studentId)) return [];
+    return demoState.orders.filter((o) => o.studentId === studentId);
+  }
+
+  async getOrderPayments(orderId: string): Promise<OrderPayment[]> {
+    const order = this.visibleOrders().find((o) => o.id === orderId);
+    if (!order) return [];
+    // The demo set carries no payment ledger of its own; one row standing for
+    // what has been collected is enough to render the screen honestly.
+    if (order.amountPaidMinor === 0) return [];
+    return [
+      {
+        id: `${order.id}-payment`,
+        kind: order.status === "refunded" ? "refund" : "payment",
+        amountMinor: order.amountPaidMinor,
+        currency: order.currency,
+        occurredAt: order.createdAt,
+        detail:
+          order.instalmentMonths !== null
+            ? `${order.instalmentsPaid} of ${order.instalmentMonths} instalments`
+            : null,
+      },
+    ];
+  }
+
+  async linkOrderToStudent(orderId: string, studentId: string): Promise<void> {
+    this.requireAdmin();
+    const order = demoState.orders.find((o) => o.id === orderId);
+    if (!order) throw new NotFoundError("That order no longer exists.");
+    const student = demoState.students.find((s) => s.id === studentId);
+    if (!student) throw new NotFoundError("That student no longer exists.");
+
+    order.studentId = studentId;
+    order.studentName = student.profile?.fullName ?? null;
+    order.claimedAt = new Date().toISOString();
+
+    // Apply what the order granted, extending rather than resetting — the same
+    // rule claim_orders_for_profile() applies in SQL.
+    if (order.grantsQuestionBankDays !== null) {
+      const existing = demoState.questionBankAccess[studentId];
+      const from =
+        existing?.expiresAt && new Date(existing.expiresAt) > new Date()
+          ? new Date(existing.expiresAt)
+          : new Date();
+      from.setDate(from.getDate() + order.grantsQuestionBankDays);
+      demoState.questionBankAccess[studentId] = {
+        granted: true,
+        expiresAt: from.toISOString(),
+        note: `Paid: ${order.skuName}`,
+        grantedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  async unlinkOrder(orderId: string): Promise<void> {
+    this.requireAdmin();
+    const order = demoState.orders.find((o) => o.id === orderId);
+    if (!order) throw new NotFoundError("That order no longer exists.");
+    order.studentId = null;
+    order.studentName = null;
+    order.claimedAt = null;
+  }
+
   async getQuestionBankAccess(studentId: string): Promise<QuestionBankAccess> {
     if (!this.canSeeStudent(studentId)) {
       return {

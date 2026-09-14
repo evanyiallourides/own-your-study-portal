@@ -10,6 +10,7 @@
 import {
   DEMO_ASSIGNMENTS,
   DEMO_LESSONS,
+  DEMO_ORDERS,
   LIVE_LESSON_IDS,
   anchorLive,
   DEMO_PARENTS,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/demo/content";
 import { calendarDayDelta, zonedParts } from "@/lib/timezone";
 import type {
+  Order,
   AppSettings,
   Assignment,
   HomeworkItem,
@@ -69,6 +71,8 @@ interface DemoState {
     string,
     { granted: boolean; expiresAt: string | null; note: string | null; grantedAt: string }
   >;
+  /** Seeded to cover every state the orders screen can render. */
+  orders: Order[];
   settings: AppSettings;
   /** The calendar day the dates above were resolved against. */
   seededOn: string;
@@ -95,6 +99,7 @@ function seed(): DemoState {
     // Empty on purpose: the demo student earns access through pooled hours,
     // which exercises the more interesting of the two routes in.
     questionBankAccess: {},
+    orders: clone(DEMO_ORDERS),
     settings: {
       notetakerEnabledGlobally: true,
       notetakerDisplayName: "Own Your Study AI Notetaker",

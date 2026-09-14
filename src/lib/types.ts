@@ -80,6 +80,95 @@ export interface QuestionBankAccess {
   hasSubscriptionRow: boolean;
 }
 
+/* ==========================================================================
+   Orders
+   --------------------------------------------------------------------------
+   What somebody bought, and whether we have worked out who they are yet.
+
+   The awkward part is `student`. Buyers arrive from a static marketing site
+   with no account, so at the moment money arrives there is often nobody to
+   attach it to. An order with no student is not an error — it is the queue an
+   administrator works through, and it is the only part of this screen that
+   asks for a human.
+   ========================================================================== */
+
+export const ORDER_STATUSES = [
+  "pending",
+  "authorised",
+  "paid",
+  "instalments_active",
+  "past_due",
+  "completed",
+  "refunded",
+  "cancelled",
+] as const;
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
+export interface OrderPayment {
+  id: string;
+  kind: "payment" | "refund" | "failure" | "dispute";
+  /** Minor units of the order's own currency. Never converted. */
+  amountMinor: number;
+  currency: string;
+  occurredAt: string;
+  detail: string | null;
+}
+
+export interface Order {
+  id: string;
+  provider: string;
+  skuSlug: string;
+  /** Snapshotted at purchase, so renaming a package does not rewrite history. */
+  skuName: string;
+  plan: "full" | "instalments";
+  quantity: number;
+  instalmentMonths: number | null;
+  instalmentsPaid: number;
+  currency: string;
+  amountTotalMinor: number;
+  amountPaidMinor: number;
+  taxAmountMinor: number;
+  status: OrderStatus;
+  buyerEmail: string;
+  buyerName: string | null;
+  buyerCountry: string | null;
+  sourceSite: string | null;
+  /** Null when nobody has been matched to this payment yet. */
+  studentId: string | null;
+  studentName: string | null;
+  claimedAt: string | null;
+  note: string | null;
+  createdAt: string;
+  grantsQuestionBankDays: number | null;
+}
+
+/**
+ * Money taken and held, with nobody to give it to.
+ *
+ * The statuses excluded are the ones where attaching a student would achieve
+ * nothing: a checkout that was never finished, one that was cancelled, and a
+ * refund — the money has gone back, so there is no entitlement left to grant
+ * and putting it in an administrator's queue is just noise.
+ */
+export function isUnmatched(order: Order): boolean {
+  if (order.studentId !== null) return false;
+  return !CONCLUDED_WITHOUT_ENTITLEMENT.includes(order.status);
+}
+
+const CONCLUDED_WITHOUT_ENTITLEMENT: OrderStatus[] = ["pending", "cancelled", "refunded"];
+
+export function isInstalmentPlanRunning(order: Order): boolean {
+  return order.status === "instalments_active" || order.status === "past_due";
+}
+
+export function needsAttention(order: Order): boolean {
+  return (
+    isUnmatched(order) ||
+    order.status === "past_due" ||
+    order.status === "refunded"
+  );
+}
+
 export interface Tutor {
   id: string;
   profileId: string;
