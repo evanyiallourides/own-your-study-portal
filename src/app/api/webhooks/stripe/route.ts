@@ -1,0 +1,394 @@
+import { NextResponse, type NextRequest } from "next/server";
+import type Stripe from "stripe";
+
+import { env, isDemoMode } from "@/lib/env";
+import { planFor, type OrderState, type PaymentEvent } from "@/lib/payments/events";
+import {
+  claimOrderForBuyer,
+  notifyAdmins,
+  revokeOrderEntitlement,
+} from "@/lib/payments/entitlements";
+import { capInstalmentPlan } from "@/lib/payments/instalments";
+import { stripeClient, stripeConfigured } from "@/lib/payments/stripe";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+
+/* ==========================================================================
+   POST /api/webhooks/stripe
+   --------------------------------------------------------------------------
+   Where money becomes an entitlement. Built to the same four properties as the
+   Recall webhook next door, for the same reasons:
+
+     · Verified — the raw body is checked against the Stripe signature before it
+       is parsed. No secret configured means every request is refused, because
+       an unsigned event can grant paid access.
+     · Idempotent — each event is recorded in webhook_events under a unique
+       (provider, event_id). Stripe retries generously; a redelivery must not
+       take a second payment's worth of action.
+     · Quiet — ids and event names only. No customer emails in application logs.
+     · Always 2xx once accepted — a 5xx makes Stripe retry an event we have
+       already stored. Failures are recorded and surfaced to administrators.
+
+   What each event *means* is in lib/payments/events.ts, which has no imports
+   and a test file. This module only normalises, loads, and writes.
+   ========================================================================== */
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const PROVIDER = "stripe";
+
+/** Stripe hands back either an id or an expanded object. We only ever want the id. */
+function idOf(value: string | { id: string } | null | undefined): string | null {
+  if (!value) return null;
+  return typeof value === "string" ? value : value.id;
+}
+
+/** Reduce a Stripe event to the fields any decision depends on. */
+function normalise(event: Stripe.Event): PaymentEvent | null {
+  const object = event.data.object as unknown as Record<string, unknown>;
+
+  switch (event.type) {
+    case "checkout.session.completed":
+    case "checkout.session.async_payment_succeeded":
+    case "checkout.session.async_payment_failed":
+    case "checkout.session.expired": {
+      const session = object as unknown as Stripe.Checkout.Session;
+      // payment_status is widened with an escape hatch for statuses Stripe has
+      // not invented yet. Anything unrecognised must fall through as undefined,
+      // which reads as "not paid" — the only safe default for a paywall.
+      const reported: string = session.payment_status;
+      const paymentStatus =
+        reported === "paid" || reported === "unpaid" || reported === "no_payment_required"
+          ? reported
+          : undefined;
+      return {
+        type: event.type,
+        objectId: session.id,
+        paymentStatus,
+        mode: session.mode === "subscription" ? "subscription" : "payment",
+        amountMinor: session.amount_total ?? 0,
+        currency: session.currency ?? undefined,
+        taxMinor: session.total_details?.amount_tax ?? 0,
+      };
+    }
+
+    case "invoice.paid":
+    case "invoice.payment_failed": {
+      const invoice = object as unknown as Stripe.Invoice;
+      return {
+        type: event.type,
+        objectId: invoice.id ?? event.id,
+        amountMinor:
+          event.type === "invoice.paid" ? invoice.amount_paid ?? 0 : invoice.amount_due ?? 0,
+        currency: invoice.currency ?? undefined,
+        taxMinor: 0,
+      };
+    }
+
+    case "customer.subscription.deleted": {
+      const subscription = object as unknown as Stripe.Subscription;
+      // Deliberately no subscriptionEndedComplete. Stripe cancels a schedule
+      // that finished and one that lapsed with the same event and the same
+      // status, so the only trustworthy answer is whether the order was paid
+      // off — which planFor works out from the order itself.
+      return { type: event.type, objectId: subscription.id };
+    }
+
+    case "charge.refunded": {
+      const charge = object as unknown as Stripe.Charge;
+      return {
+        type: event.type,
+        objectId: charge.id,
+        amountMinor: charge.amount,
+        amountRefundedMinor: charge.amount_refunded,
+        currency: charge.currency,
+      };
+    }
+
+    case "charge.dispute.created": {
+      const dispute = object as unknown as Stripe.Dispute;
+      return {
+        type: event.type,
+        objectId: dispute.id,
+        amountMinor: dispute.amount,
+        currency: dispute.currency,
+        detail: dispute.reason,
+      };
+    }
+
+    default:
+      return { type: event.type, objectId: event.id };
+  }
+}
+
+/** Which order an event is about. Sessions carry it; invoices and charges need a lookup. */
+async function findOrderId(
+  db: ReturnType<typeof createSupabaseAdminClient>,
+  event: Stripe.Event,
+): Promise<string | null> {
+  const object = event.data.object as unknown as Record<string, unknown>;
+
+  const metadata = object.metadata as Record<string, string> | undefined;
+  const direct = metadata?.order_id ?? (object.client_reference_id as string | undefined);
+  if (direct) return direct;
+
+  const subscriptionId =
+    idOf(object.subscription as string | { id: string } | null) ??
+    (event.type === "customer.subscription.deleted" ? (object.id as string) : null);
+  if (subscriptionId) {
+    const { data } = await db
+      .from("orders")
+      .select("id")
+      .eq("stripe_subscription_id", subscriptionId)
+      .maybeSingle();
+    if (data?.id) return data.id as string;
+  }
+
+  const paymentIntentId = idOf(object.payment_intent as string | { id: string } | null);
+  if (paymentIntentId) {
+    const { data } = await db
+      .from("orders")
+      .select("id")
+      .eq("stripe_payment_intent_id", paymentIntentId)
+      .maybeSingle();
+    if (data?.id) return data.id as string;
+  }
+
+  return null;
+}
+
+export async function POST(request: NextRequest) {
+  if (isDemoMode()) {
+    return NextResponse.json(
+      { error: "The portal is running in demo mode and cannot accept webhooks." },
+      { status: 503 },
+    );
+  }
+  if (!stripeConfigured() || !env.stripeWebhookSecret) {
+    // Fail closed. An unsigned event that is trusted grants paid content away.
+    console.warn("[stripe] refused a webhook: no signing secret configured");
+    return NextResponse.json({ error: "Webhooks are not configured." }, { status: 503 });
+  }
+
+  // Raw text, before any parsing — the signature covers the exact bytes sent.
+  const rawBody = await request.text();
+  const signature = request.headers.get("stripe-signature");
+  if (!signature) {
+    return NextResponse.json({ error: "No stripe-signature header." }, { status: 400 });
+  }
+
+  let event: Stripe.Event;
+  try {
+    // The async variant works on both the Node and edge runtimes, so a future
+    // move to the edge does not silently start failing verification.
+    event = await stripeClient().webhooks.constructEventAsync(
+      rawBody,
+      signature,
+      env.stripeWebhookSecret,
+    );
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : "Signature check failed.";
+    console.warn("[stripe] rejected webhook:", detail);
+    return NextResponse.json({ error: "Signature check failed." }, { status: 400 });
+  }
+
+  const db = createSupabaseAdminClient();
+
+  /* -- Idempotency. The unique index is the guard, not a check-then-act select:
+        two simultaneous deliveries both pass a select, but only one can win the
+        insert. -- */
+  const { error: insertError } = await db.from("webhook_events").insert({
+    provider: PROVIDER,
+    event_id: event.id,
+    event_type: event.type,
+    status: "received",
+  });
+
+  if (insertError) {
+    if (insertError.code === "23505") {
+      return NextResponse.json({ ok: true, deduplicated: true });
+    }
+    console.error("[stripe] could not record delivery:", insertError.code);
+    return NextResponse.json({ error: "Could not record the delivery." }, { status: 500 });
+  }
+
+  const finish = async (status: string, detail?: string, orderId?: string | null) => {
+    await db
+      .from("webhook_events")
+      .update({
+        status,
+        processed_at: new Date().toISOString(),
+        error_message: detail ?? null,
+        ...(orderId ? { order_id: orderId } : {}),
+      })
+      .eq("provider", PROVIDER)
+      .eq("event_id", event.id);
+  };
+
+  try {
+    const orderId = await findOrderId(db, event);
+    if (!orderId) {
+      // `stripe trigger` fixtures land here, as does any event for something we
+      // did not sell. Both are fine; neither may take the endpoint down.
+      await finish("ignored", "No order matches this event.");
+      return NextResponse.json({ ok: true, ignored: true });
+    }
+
+    const { data: row } = await db
+      .from("orders")
+      .select(
+        "id, plan, status, instalment_months, instalments_paid, amount_total_minor, amount_paid_minor, grants_question_bank_days, buyer_email, sku_name",
+      )
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (!row) {
+      await finish("ignored", "The order in the metadata no longer exists.", null);
+      return NextResponse.json({ ok: true, ignored: true });
+    }
+
+    const order: OrderState = {
+      id: row.id,
+      plan: row.plan === "instalments" ? "instalments" : "full",
+      status: row.status,
+      instalmentMonths: row.instalment_months,
+      instalmentsPaid: row.instalments_paid,
+      amountTotalMinor: row.amount_total_minor,
+      amountPaidMinor: row.amount_paid_minor,
+      grantsQuestionBankDays: row.grants_question_bank_days,
+    };
+
+    const normalised = normalise(event);
+    if (!normalised) {
+      await finish("ignored", `Could not read a ${event.type} payload.`, orderId);
+      return NextResponse.json({ ok: true, ignored: true });
+    }
+
+    const plan = planFor(normalised, order);
+
+    /* -- Whatever the event was, record what Stripe now knows about the buyer.
+          The order was created before they typed anything. -- */
+    const session =
+      event.type.startsWith("checkout.session.")
+        ? (event.data.object as unknown as Stripe.Checkout.Session)
+        : null;
+
+    const updates: Record<string, unknown> = {};
+    if (session) {
+      const email = session.customer_details?.email ?? session.customer_email ?? null;
+      if (email) updates.buyer_email = email;
+      if (session.customer_details?.name) updates.buyer_name = session.customer_details.name;
+      if (session.customer_details?.address?.country) {
+        updates.buyer_country = session.customer_details.address.country;
+      }
+      const customerId = idOf(session.customer);
+      if (customerId) {
+        updates.stripe_customer_id = customerId;
+        await db.from("customers").upsert(
+          {
+            stripe_customer_id: customerId,
+            email: session.customer_details?.email ?? session.customer_email ?? "",
+            name: session.customer_details?.name ?? null,
+          },
+          { onConflict: "stripe_customer_id" },
+        );
+      }
+      const paymentIntentId = idOf(session.payment_intent);
+      if (paymentIntentId) updates.stripe_payment_intent_id = paymentIntentId;
+      const subscriptionId = idOf(session.subscription);
+      if (subscriptionId) {
+        updates.stripe_subscription_id = subscriptionId;
+
+        /* Checkout can only open an OPEN-ENDED subscription. Until this runs,
+           "4 monthly payments" is a subscription that bills every month for
+           ever. It is therefore done here, on the session that created it, and
+           a failure is an incident: the order is flagged and every
+           administrator is told, because the alternative is charging somebody
+           indefinitely and nobody noticing. */
+        if (row.instalment_months && row.instalment_months >= 2) {
+          const capped = await capInstalmentPlan(
+            stripeClient(),
+            subscriptionId,
+            row.instalment_months,
+          );
+          if (capped.scheduleId) {
+            updates.stripe_subscription_schedule_id = capped.scheduleId;
+          }
+          if (capped.problem) {
+            updates.note = `Instalment plan NOT capped: ${capped.problem}`;
+            await notifyAdmins(
+              db,
+              "payment_failed",
+              "An instalment plan is uncapped and will keep billing",
+              `${row.sku_name}: the subscription schedule could not be created, so this ` +
+                `subscription will bill every month until someone cancels it in Stripe. ` +
+                `Subscription ${subscriptionId}. Reason: ${capped.problem}`,
+            );
+          }
+        }
+      }
+    }
+
+    if (plan.status) updates.status = plan.status;
+    if (plan.addPaidMinor) updates.amount_paid_minor = order.amountPaidMinor + plan.addPaidMinor;
+    if (plan.countsInstalment) updates.instalments_paid = order.instalmentsPaid + 1;
+    if (typeof plan.taxMinor === "number") updates.tax_amount_minor = plan.taxMinor;
+
+    if (Object.keys(updates).length > 0) {
+      await db.from("orders").update(updates).eq("id", orderId);
+    }
+
+    if (plan.payment) {
+      // The unique index makes a redelivery a no-op rather than a double count.
+      await db.from("order_payments").insert({
+        order_id: orderId,
+        stripe_object_id: plan.payment.stripeObjectId,
+        kind: plan.payment.kind,
+        amount_minor: plan.payment.amountMinor,
+        currency: plan.payment.currency,
+        detail: plan.payment.detail ?? null,
+      });
+    }
+
+    if (plan.entitlement === "grant") {
+      const email = (updates.buyer_email as string | undefined) ?? row.buyer_email ?? "";
+      const result = await claimOrderForBuyer(db, email);
+      if (!result.claimed) {
+        await notifyAdmins(
+          db,
+          "order_unmatched",
+          "A payment needs linking to a student",
+          `${row.sku_name} was paid for by ${email || "an unknown email"}. ${result.reason}`,
+        );
+      }
+    } else if (plan.entitlement === "revoke") {
+      await revokeOrderEntitlement(db, orderId);
+    }
+
+    if (plan.notifyAdmins) {
+      await notifyAdmins(
+        db,
+        plan.notifyAdmins.kind,
+        "Payment needs attention",
+        `${row.sku_name}: ${plan.notifyAdmins.detail}`,
+      );
+    }
+
+    await finish(plan.ignored ? "ignored" : "processed", plan.ignored, orderId);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : "Processing failed.";
+    console.error("[stripe] processing failed for event", event.id, "-", detail);
+    await finish("failed", detail);
+    // Still a 200: the delivery is recorded, and a retry would be dropped as a
+    // duplicate anyway. The failure is visible to administrators.
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+export async function GET() {
+  return NextResponse.json(
+    { error: "This endpoint accepts signed POST requests from Stripe only." },
+    { status: 405 },
+  );
+}

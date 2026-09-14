@@ -6,6 +6,8 @@
    import time: the portal must still boot in demo mode with no keys at all.
    ========================================================================== */
 
+import type { StripeMode } from "@/lib/stripe-prices.generated";
+
 const read = (name: string): string | null => {
   const value = process.env[name];
   return value && value.trim() !== "" ? value.trim() : null;
@@ -53,6 +55,21 @@ export const env = {
   },
   get googleClientSecret() {
     return read("GOOGLE_CLIENT_SECRET");
+  },
+  get stripeSecretKey() {
+    return read("STRIPE_SECRET_KEY");
+  },
+  get stripeWebhookSecret() {
+    return read("STRIPE_WEBHOOK_SECRET");
+  },
+  /* Optional. Buy-now-pay-later cannot appear in Checkout's subscription mode,
+     so pay-in-full and instalments need separate payment method
+     configurations. Unset, Stripe uses the account default. */
+  get stripePmcFull() {
+    return read("STRIPE_PMC_FULL");
+  },
+  get stripePmcInstalments() {
+    return read("STRIPE_PMC_INSTALMENTS");
   },
   get appUrl() {
     return read("NEXT_PUBLIC_APP_URL") ?? "http://localhost:3000";
@@ -115,6 +132,54 @@ export function googleStatus(): IntegrationStatus {
     };
   }
   return { configured: true, detail: "Ready — tutors can connect their Google Calendar." };
+}
+
+/**
+ * Which set of Stripe prices to charge against, read from the key itself.
+ *
+ * Test and live are separate worlds with separate price IDs, and the usual way
+ * to get this wrong is a stale STRIPE_MODE variable left pointing at test while
+ * a live key is in place — which fails by taking real money against a price
+ * that does not exist. The key already knows; nothing else gets a vote.
+ */
+export function stripeMode(): StripeMode | null {
+  const key = env.stripeSecretKey;
+  if (!key) return null;
+  if (key.startsWith("sk_live_") || key.startsWith("rk_live_")) return "live";
+  if (key.startsWith("sk_test_") || key.startsWith("rk_test_")) return "test";
+  return null;
+}
+
+export function paymentsStatus(): IntegrationStatus {
+  const key = env.stripeSecretKey;
+  if (!key) {
+    return {
+      configured: false,
+      detail: "No STRIPE_SECRET_KEY set. The site can quote prices but cannot take payment.",
+    };
+  }
+  const mode = stripeMode();
+  if (!mode) {
+    return {
+      configured: false,
+      detail: "STRIPE_SECRET_KEY is not a recognisable secret key. Expected sk_test_… or sk_live_…",
+    };
+  }
+  if (!env.stripeWebhookSecret) {
+    return {
+      configured: false,
+      detail:
+        `Stripe key is ${mode} mode, but no STRIPE_WEBHOOK_SECRET is set. ` +
+        "Payments would be taken and never recorded, which is the worst of both.",
+    };
+  }
+  return {
+    configured: true,
+    detail:
+      mode === "live"
+        ? "Ready — LIVE mode. Charges are real."
+        : "Ready — test mode. No real money moves.",
+  };
 }
 
 export function recallStatus(): IntegrationStatus {

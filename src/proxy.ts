@@ -17,7 +17,17 @@ import { createServerClient } from "@supabase/ssr";
    round trip, so treating it as the gate would be a mistake.
    ========================================================================== */
 
-const PUBLIC_PATHS = ["/login", "/auth/callback", "/api/webhooks", "/demo/switch"];
+/* /checkout and /api/checkout are public because buyers arrive from the static
+   marketing site with no account and the portal has no self-signup. Validation
+   in the route is what stands in for a session there. */
+const PUBLIC_PATHS = [
+  "/login",
+  "/auth/callback",
+  "/api/webhooks",
+  "/checkout",
+  "/api/checkout",
+  "/demo/switch",
+];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
