@@ -85,12 +85,18 @@ async function claim(): Promise<number> {
 
 async function payFor(
   slug: string,
-  { email = "buyer@example.com", status = "paid", days = 365 as number | null } = {},
+  {
+    email = "buyer@example.com",
+    status = "paid",
+    days = 365 as number | null,
+    studentEmail = null as string | null,
+  } = {},
 ): Promise<void> {
   await db.exec(`insert into public.orders
     (provider, sku_slug, sku_name, plan, currency, amount_total_minor, buyer_email,
-     status, grants_question_bank_days)
+     student_email, status, grants_question_bank_days)
     values ('stripe', '${slug}', '${slug}', 'full', 'usd', 12000, '${email}',
+            ${studentEmail === null ? "null" : `'${studentEmail}'`},
             '${status}', ${days === null ? "null" : days})`);
 }
 
@@ -366,5 +372,46 @@ describe("transcript retention", () => {
       `select has_function_privilege('authenticated', 'public.purge_expired_transcripts()', 'execute') as ok`,
     );
     assert.equal(ok, false, "a destructive job must not be callable from the client");
+  });
+});
+
+describe("a parent buying for a child", () => {
+  it("attaches the order to the student, not the payer", async () => {
+    // buyer_email is the card holder. Matching a claim on the payer would mean
+    // the child's own profile never finds the order that bought their lessons,
+    // and the parent would silently collect the entitlement instead.
+    await payFor("question-bank", {
+      email: "a.parent@example.com",
+      studentEmail: "Buyer@Example.com", // the child, cased differently
+    });
+
+    const claimed = await claim();
+    assert.ok(claimed >= 1, "the student's own profile should find it");
+
+    const { who } = await one<{ who: string }>(
+      `select coalesce(student_email, buyer_email) as who
+         from public.orders where buyer_email = 'a.parent@example.com'`,
+    );
+    assert.match(who, /buyer@example\.com/i, "claimed on the student's address");
+  });
+
+  it("does not let the payer claim it", async () => {
+    // The parent has no student record here, and the order is not theirs to
+    // take even if they did.
+    await db.exec(`
+      insert into auth.users (id, email) values
+        ('33333333-3333-3333-3333-333333333333', 'a.parent@example.com') on conflict do nothing;
+      insert into public.profiles (id, email, first_name, last_name, role)
+        values ('33333333-3333-3333-3333-333333333333', 'a.parent@example.com', 'A', 'Parent', 'parent')
+        on conflict (id) do nothing;
+    `);
+    await payFor("question-bank", {
+      email: "a.parent@example.com",
+      studentEmail: "someone.else@example.com",
+    });
+    const { n } = await one<{ n: number }>(
+      `select public.claim_orders_for_profile('33333333-3333-3333-3333-333333333333') as n`,
+    );
+    assert.equal(Number(n), 0, "a parent must not collect their child's entitlement");
   });
 });

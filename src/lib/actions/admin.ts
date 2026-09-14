@@ -137,6 +137,7 @@ const settingsSchema = z.object({
   notetakerEnabledGlobally: z.boolean().optional(),
   notetakerDisplayName: z.string().trim().min(1).max(80).optional(),
   requireGuardianConsentUnder18: z.boolean().optional(),
+  autoInvitePaidBuyers: z.boolean().optional(),
   transcriptRetentionDays: z.coerce.number().int().min(1).max(3650).optional(),
   mediaRetentionHours: z.coerce.number().int().min(0).max(720).optional(),
 });

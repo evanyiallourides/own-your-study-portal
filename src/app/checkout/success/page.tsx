@@ -28,6 +28,9 @@ export default async function CheckoutSuccessPage({
   const sessionId = typeof query.session_id === "string" ? query.session_id : null;
 
   let email: string | null = null;
+  /* Checkout asks who the student is when it is not the buyer. Saying the
+     address back is what stops somebody watching the wrong inbox. */
+  let studentEmail: string | null = null;
   let settled = false;
   let pending = false;
   let amount: string | null = null;
@@ -36,6 +39,8 @@ export default async function CheckoutSuccessPage({
     try {
       const session = await stripeClient().checkout.sessions.retrieve(sessionId);
       email = session.customer_details?.email ?? session.customer_email ?? null;
+      const given = session.custom_fields?.find((f) => f.key === "student_email")?.text?.value?.trim();
+      if (given && given.toLowerCase() !== (email ?? "").toLowerCase()) studentEmail = given;
       settled = session.payment_status === "paid" || session.payment_status === "no_payment_required";
       pending = session.payment_status === "unpaid";
       if (session.amount_total !== null && session.currency) {
@@ -66,15 +71,26 @@ export default async function CheckoutSuccessPage({
       ) : (
         <p className="max-w-prose text-ink-500">
           {amount ? `That's ${amount} received. ` : ""}
-          We will email {email ? <strong className="text-ink">{email}</strong> : "you"} an
-          invitation to the student portal, where your lessons, notes and materials live.
+          {studentEmail ? (
+            <>
+              We are setting up the portal for{" "}
+              <strong className="text-ink">{studentEmail}</strong> and everything you have just
+              bought will be on it. Watch for an email &mdash; it has the link to get in.
+            </>
+          ) : (
+            <>
+              We will email {email ? <strong className="text-ink">{email}</strong> : "you"} a link
+              to the student portal, where your lessons, notes and materials live. Anything you
+              have just bought will already be there when you arrive.
+            </>
+          )}
         </p>
       )}
 
       {settled && (
         <p className="max-w-prose text-ink-500">
-          A receipt is on its way from Stripe. If you already have a portal account, anything you
-          have just bought will be on it the next time you sign in.
+          A receipt is on its way from Stripe. If there is already a portal account for{" "}
+          {studentEmail ?? email ?? "that address"}, this is on it now &mdash; just sign in.
         </p>
       )}
 

@@ -167,6 +167,27 @@ export async function POST(request: NextRequest) {
         automatic_tax: { enabled: true },
         billing_address_collection: "required",
         payment_method_configuration: paymentMethodConfiguration(plan),
+        /* Who is this for?
+           The payer is often a parent. Without asking, a child's lessons end up
+           on their mother's account and the question bank licence with them.
+           Both optional and both labelled for the common case, which is that
+           the buyer is the student and leaves them blank. */
+        custom_fields: [
+          {
+            key: "student_name",
+            label: { type: "custom", custom: "Student's name (leave blank if it's you)" },
+            type: "text",
+            optional: true,
+            text: { maximum_length: 80 },
+          },
+          {
+            key: "student_email",
+            label: { type: "custom", custom: "Student's email (leave blank if it's yours)" },
+            type: "text",
+            optional: true,
+            text: { maximum_length: 120 },
+          },
+        ],
         client_reference_id: order.id,
         metadata: { order_id: order.id, sku: sku.slug, plan, site: site ?? "" },
         // Invoice events carry the *subscription's* metadata, not the session's,

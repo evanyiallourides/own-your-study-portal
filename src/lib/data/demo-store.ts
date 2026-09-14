@@ -107,6 +107,7 @@ function seed(): DemoState {
       transcriptRetentionDays: 365,
       mediaRetentionHours: 24,
       questionBankFreeHours: 20,
+      autoInvitePaidBuyers: true,
     },
   };
 }

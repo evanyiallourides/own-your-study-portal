@@ -864,6 +864,7 @@ export class SupabaseRepository implements Repository {
       transcriptRetentionDays: data?.transcript_retention_days ?? 365,
       mediaRetentionHours: data?.media_retention_hours ?? 24,
       questionBankFreeHours: data?.question_bank_free_hours ?? 20,
+      autoInvitePaidBuyers: data?.auto_invite_paid_buyers ?? true,
     };
   }
 
@@ -874,6 +875,8 @@ export class SupabaseRepository implements Repository {
     if (patch.notetakerDisplayName !== undefined) row.notetaker_display_name = patch.notetakerDisplayName;
     if (patch.requireGuardianConsentUnder18 !== undefined)
       row.require_guardian_consent_under_18 = patch.requireGuardianConsentUnder18;
+    if (patch.autoInvitePaidBuyers !== undefined)
+      row.auto_invite_paid_buyers = patch.autoInvitePaidBuyers;
     if (patch.questionBankFreeHours !== undefined)
       row.question_bank_free_hours = patch.questionBankFreeHours;
     if (patch.transcriptRetentionDays !== undefined)

@@ -8,6 +8,7 @@ import {
   notifyAdmins,
   revokeOrderEntitlement,
 } from "@/lib/payments/entitlements";
+import { enrolPaidBuyer, resolveStudent } from "@/lib/payments/enrolment";
 import { capInstalmentPlan } from "@/lib/payments/instalments";
 import { stripeClient, stripeConfigured } from "@/lib/payments/stripe";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -304,6 +305,15 @@ export async function POST(request: NextRequest) {
         updates.buyer_country = session.customer_details.address.country;
       }
 
+      /* Checkout asked who the student is. Both fields are optional, so this
+         is usually empty and the buyer is the student. */
+      for (const field of session.custom_fields ?? []) {
+        const value = field.text?.value?.trim();
+        if (!value) continue;
+        if (field.key === "student_name") updates.student_name_given = value;
+        if (field.key === "student_email") updates.student_email_given = value;
+      }
+
       const providerCustomerId = idOf(session.customer);
       if (providerCustomerId) {
         const { data: customer } = await db
@@ -357,13 +367,41 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    /* Every settled order needs a student, not only the ones granting an
+       entitlement: twenty tutoring hours need the portal their lessons and
+       notes will appear in just as much as a question bank does.
+
+       Resolved here, before the write below, because the address it produces
+       is a column — claim_orders_for_profile() matches on it. */
+    const settles =
+      plan.status === "paid" || plan.status === "instalments_active" || plan.status === "completed";
+
+    const student = settles
+      ? resolveStudent({
+          buyerEmail: (updates.buyer_email as string | undefined) ?? row.buyer_email ?? "",
+          buyerName: (updates.buyer_name as string | undefined) ?? null,
+          studentEmail: (updates.student_email_given as string | undefined) ?? null,
+          studentName: (updates.student_name_given as string | undefined) ?? null,
+        })
+      : null;
+
+    if (student?.boughtForSomeoneElse) {
+      updates.student_email = student.email;
+      updates.note = `Bought by ${(updates.buyer_email as string) ?? row.buyer_email} for ${student.email}`;
+    }
+
     if (plan.status) updates.status = plan.status;
     if (plan.addPaidMinor) updates.amount_paid_minor = order.amountPaidMinor + plan.addPaidMinor;
     if (plan.countsInstalment) updates.instalments_paid = order.instalmentsPaid + 1;
     if (typeof plan.taxMinor === "number") updates.tax_amount_minor = plan.taxMinor;
 
     if (Object.keys(updates).length > 0) {
-      await db.from("orders").update(updates).eq("id", orderId);
+      // The two student_*_given values are how the custom fields travel between
+      // the blocks above; they are not columns and must not reach the update.
+      const { student_name_given: _n, student_email_given: _e, ...columns } = updates;
+      if (Object.keys(columns).length > 0) {
+        await db.from("orders").update(columns).eq("id", orderId);
+      }
     }
 
     if (plan.payment) {
@@ -378,18 +416,44 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (plan.entitlement === "grant") {
-      const email = (updates.buyer_email as string | undefined) ?? row.buyer_email ?? "";
-      const result = await claimOrderForBuyer(db, email);
+    if (settles && !student) {
+      await notifyAdmins(
+        db,
+        "order_unmatched",
+        "A payment arrived without a usable email",
+        `${row.sku_name} was paid for, but neither the buyer nor the student gave an address we could use.`,
+      );
+    }
+
+    if (student) {
+      let result = await claimOrderForBuyer(db, student.email);
+
       if (!result.claimed) {
-        await notifyAdmins(
-          db,
-          "order_unmatched",
-          "A payment needs linking to a student",
-          `${row.sku_name} was paid for by ${email || "an unknown email"}. ${result.reason}`,
-        );
+        // Nobody with that address yet. Invite them; accepting it builds the
+        // account and claims the order on the way through handle_new_user().
+        const enrolled = await enrolPaidBuyer(db, student);
+        if (enrolled.status === "exists") {
+          // Somebody registered between the payment and now.
+          result = await claimOrderForBuyer(db, student.email);
+        }
+
+        if (!result.claimed && enrolled.status !== "invited") {
+          await notifyAdmins(
+            db,
+            "order_unmatched",
+            "A payment needs linking to a student",
+            `${row.sku_name} was paid for by ${student.email}. ` +
+              (enrolled.status === "off"
+                ? "Automatic enrolment is switched off in settings."
+                : enrolled.status === "failed"
+                  ? `The invitation could not be sent: ${enrolled.reason}`
+                  : result.reason),
+          );
+        }
       }
-    } else if (plan.entitlement === "revoke") {
+    }
+
+    if (plan.entitlement === "revoke") {
       await revokeOrderEntitlement(db, orderId);
     }
 

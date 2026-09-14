@@ -348,6 +348,8 @@ export interface AppSettings {
   mediaRetentionHours: number;
   /** Pooled tutoring hours at which the question banks are included. */
   questionBankFreeHours: number;
+  /** Whether a paid order with no matching account invites one. */
+  autoInvitePaidBuyers: boolean;
 }
 
 /** Who is signed in, resolved once per request. */

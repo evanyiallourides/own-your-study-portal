@@ -533,6 +533,29 @@ export function SettingsForm({ settings }: { settings: AppSettings }) {
       </fieldset>
 
       <fieldset className="card space-y-5 p-5">
+        <legend className="px-1 font-display text-lg font-semibold">Payments</legend>
+
+        <label className="flex items-start gap-3 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={form.autoInvitePaidBuyers}
+            onChange={(e) =>
+              setForm((prev) => ({ ...prev, autoInvitePaidBuyers: e.target.checked }))
+            }
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            <span className="font-medium">Enrol buyers automatically</span>
+            <span className="mt-1 block text-xs text-ink-300">
+              When somebody pays and no account matches the student, invite one. They accept from
+              their own inbox and the purchase is already there. Off means the payment waits in
+              the orders queue for somebody to link it by hand.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      <fieldset className="space-y-4">
         <legend className="px-1 font-display text-lg font-semibold">Retention</legend>
 
         <div className="grid gap-4 sm:grid-cols-2">
