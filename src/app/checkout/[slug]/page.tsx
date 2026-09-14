@@ -126,6 +126,33 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
                 />
               </label>
             )}
+            {sku.grants !== null && (
+              /* Digital content, readable the moment access is granted. In the
+                 UK and EU the fourteen-day cancellation right survives unless
+                 the buyer asks for immediate access AND acknowledges losing it,
+                 so the refund policy's "not refundable once you open it" is
+                 only true if that is actually captured here. Required, so the
+                 form will not submit without it. */
+              <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-rule bg-white p-4 text-sm text-ink-700">
+                <input
+                  type="checkbox"
+                  name="waive_cooling_off"
+                  value="yes"
+                  required
+                  className="mt-0.5 h-4 w-4 flex-none"
+                />
+                <span>
+                  I want access straight away, and I understand that once it is open this is
+                  no longer refundable.{" "}
+                  <a
+                    href="https://ownyourstudy.com/refunds.html"
+                    className="underline underline-offset-2"
+                  >
+                    Refund policy
+                  </a>
+                </span>
+              </label>
+            )}
             <button
               type="submit"
               className="rounded-xl bg-accent px-5 py-4 text-left text-white transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
@@ -165,6 +192,10 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
       )}
 
       <p className="text-xs text-ink-500">
+        <a href="https://ownyourstudy.com/refunds.html" className="underline underline-offset-2">
+          Refunds and cancellations
+        </a>
+        {" · "}
         You will be taken to Stripe to pay. Prices shown in{" "}
         {currency.toUpperCase()}
         {currency === "aud" ? ", inclusive of GST" : ""}.

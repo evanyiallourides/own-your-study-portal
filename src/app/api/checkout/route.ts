@@ -71,6 +71,14 @@ export async function POST(request: NextRequest) {
     return refuse("That package is not sold on a payment plan.");
   }
 
+  /* Digital content cannot be sold as non-refundable unless the buyer asked
+     for immediate access and acknowledged losing the cancellation right. The
+     checkbox is required in the markup; this is the half that cannot be
+     removed with dev tools. */
+  if (sku.grants !== null && read("waive_cooling_off") !== "yes") {
+    return refuse("Please confirm you want access straight away.");
+  }
+
   const site = read("site");
   if (sku.ibOnly && site !== "own-your-ib") {
     // The question banks are IB content. Every sub-site links to the SKU, but

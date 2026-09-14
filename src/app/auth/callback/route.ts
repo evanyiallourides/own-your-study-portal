@@ -17,9 +17,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}/login`);
   }
 
-  if (errorDescription || !code) {
-    const reason = errorDescription ?? "That sign-in link is no longer valid.";
-    return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(reason)}`);
+  if (errorDescription) {
+    return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(errorDescription)}`);
+  }
+
+  /* No code is not the same as a bad link. Server-minted links — every
+     invitation is one — come back with the session in the URL fragment
+     instead, and a fragment never reaches the server. Hand those to the one
+     place that can read it; the browser carries the fragment across this
+     redirect because the new location has none of its own. */
+  if (!code) {
+    return NextResponse.redirect(`${origin}/auth/complete`);
   }
 
   const db = await createSupabaseServerClient();
