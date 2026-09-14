@@ -121,6 +121,7 @@ export async function POST(request: NextRequest) {
       currency,
       amount_total_minor: totalMinor,
       grants_question_bank_days: sku.grants?.questionBankDays ?? null,
+      provider: "stripe",
       status: "pending",
       // Overwritten from the session once Stripe has collected it. Not null,
       // so something has to go here until then.
@@ -175,7 +176,7 @@ export async function POST(request: NextRequest) {
 
     await db
       .from("orders")
-      .update({ stripe_checkout_session_id: session.id })
+      .update({ provider_checkout_id: session.id })
       .eq("id", order.id);
 
     if (!session.url) {

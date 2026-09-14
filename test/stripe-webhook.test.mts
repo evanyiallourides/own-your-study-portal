@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  HANDLED_EVENTS,
   planFor,
   type OrderState,
-  type PaymentEvent,
+  type PaymentSignal,
+  type SignalKind,
 } from "@/lib/payments/events";
 
 /* ==========================================================================
@@ -48,36 +48,41 @@ const bankOrder = (over: Partial<OrderState> = {}): OrderState => ({
   ...over,
 });
 
-const event = (over: Partial<PaymentEvent> & { type: string }): PaymentEvent => ({
+const signal = (over: Partial<PaymentSignal> & { kind: SignalKind }): PaymentSignal => ({
   objectId: "cs_test_1",
   currency: "usd",
   ...over,
 });
 
-describe("checkout.session.completed", () => {
+/** Every signal a provider can send. Used to prove none is left unhandled. */
+const ALL_SIGNALS: SignalKind[] = [
+  "authorised",
+  "settled",
+  "settlement_failed",
+  "instalment_settled",
+  "instalment_failed",
+  "plan_ended",
+  "refunded",
+  "disputed",
+  "abandoned",
+];
+
+describe("authorisation and settlement", () => {
   it("grants nothing when the money has not actually moved", () => {
-    // Klarna, Zip and Afterpay complete the session and settle afterwards. This
-    // is the case that would otherwise hand the question banks to anyone who
-    // opened a BNPL checkout and walked away.
-    const plan = planFor(
-      event({ type: "checkout.session.completed", paymentStatus: "unpaid", amountMinor: 12000 }),
-      bankOrder(),
-    );
-    assert.equal(plan.entitlement, undefined);
-    assert.equal(plan.status, undefined);
-    assert.equal(plan.addPaidMinor, undefined);
-    assert.match(plan.ignored ?? "", /not yet paid/i);
+    // Klarna and Zip complete a session and settle afterwards; a Bacs or BECS
+    // debit is authorised now and confirmed days from now, and can still fail.
+    // This is the case that would otherwise hand over the question banks to
+    // anyone who started a checkout, or signed a mandate and cancelled it.
+    const plan = planFor(signal({ kind: "authorised", amountMinor: 12000 }), bankOrder());
+    assert.equal(plan.status, "authorised", "the commitment is worth recording");
+    assert.equal(plan.entitlement, undefined, "but it entitles them to nothing");
+    assert.equal(plan.addPaidMinor, undefined, "and no money has been received");
+    assert.equal(plan.payment, undefined);
   });
 
   it("marks an outright purchase paid and grants what it granted", () => {
     const plan = planFor(
-      event({
-        type: "checkout.session.completed",
-        paymentStatus: "paid",
-        mode: "payment",
-        amountMinor: 12000,
-        taxMinor: 0,
-      }),
+      signal({ kind: "settled", amountMinor: 12000, taxMinor: 0 }),
       bankOrder(),
     );
     assert.equal(plan.status, "paid");
@@ -90,12 +95,7 @@ describe("checkout.session.completed", () => {
     // Tutoring hours reach the question banks through the pooled-hours rule in
     // SQL, not through an entitlement written here.
     const plan = planFor(
-      event({
-        type: "checkout.session.completed",
-        paymentStatus: "paid",
-        mode: "payment",
-        amountMinor: 132000,
-      }),
+      signal({ kind: "settled", amountMinor: 132000 }),
       instalmentOrder({ plan: "full", instalmentMonths: null }),
     );
     assert.equal(plan.entitlement, undefined);
@@ -104,12 +104,7 @@ describe("checkout.session.completed", () => {
 
   it("opens an instalment plan rather than calling it paid", () => {
     const plan = planFor(
-      event({
-        type: "checkout.session.completed",
-        paymentStatus: "paid",
-        mode: "subscription",
-        amountMinor: 33000,
-      }),
+      signal({ kind: "settled", amountMinor: 33000 }),
       instalmentOrder(),
     );
     assert.equal(plan.status, "instalments_active");
@@ -118,14 +113,10 @@ describe("checkout.session.completed", () => {
   });
 });
 
-describe("deferred payments", () => {
+describe("deferred settlement", () => {
   it("is the settlement that actually grants access", () => {
     const plan = planFor(
-      event({
-        type: "checkout.session.async_payment_succeeded",
-        mode: "payment",
-        amountMinor: 12000,
-      }),
+      signal({ kind: "settled", amountMinor: 12000 }),
       bankOrder(),
     );
     assert.equal(plan.status, "paid");
@@ -134,7 +125,7 @@ describe("deferred payments", () => {
 
   it("cancels the order and tells someone when it fails", () => {
     const plan = planFor(
-      event({ type: "checkout.session.async_payment_failed", amountMinor: 12000 }),
+      signal({ kind: "settlement_failed", amountMinor: 12000 }),
       bankOrder(),
     );
     assert.equal(plan.status, "cancelled");
@@ -144,16 +135,16 @@ describe("deferred payments", () => {
   });
 });
 
-describe("checkout.session.expired", () => {
+describe("abandoned checkout", () => {
   it("cleans up an abandoned checkout", () => {
-    const plan = planFor(event({ type: "checkout.session.expired" }), bankOrder());
+    const plan = planFor(signal({ kind: "abandoned" }), bankOrder());
     assert.equal(plan.status, "cancelled");
   });
 
   it("never undoes an order that has already been paid", () => {
     // A late or out-of-order delivery must not cancel a paid order.
     const plan = planFor(
-      event({ type: "checkout.session.expired" }),
+      signal({ kind: "abandoned" }),
       bankOrder({ status: "paid", amountPaidMinor: 12000 }),
     );
     assert.equal(plan.status, undefined);
@@ -164,7 +155,7 @@ describe("checkout.session.expired", () => {
 describe("instalments", () => {
   it("counts each invoice and keeps the plan open until the last", () => {
     const plan = planFor(
-      event({ type: "invoice.paid", objectId: "in_2", amountMinor: 33000 }),
+      signal({ kind: "instalment_settled", objectId: "in_2", amountMinor: 33000 }),
       instalmentOrder({ status: "instalments_active", instalmentsPaid: 1, amountPaidMinor: 33000 }),
     );
     assert.equal(plan.status, "instalments_active");
@@ -174,7 +165,7 @@ describe("instalments", () => {
 
   it("completes the order on the final instalment", () => {
     const plan = planFor(
-      event({ type: "invoice.paid", objectId: "in_4", amountMinor: 33000 }),
+      signal({ kind: "instalment_settled", objectId: "in_4", amountMinor: 33000 }),
       instalmentOrder({ status: "instalments_active", instalmentsPaid: 3, amountPaidMinor: 99000 }),
     );
     assert.equal(plan.status, "completed");
@@ -185,7 +176,7 @@ describe("instalments", () => {
     // Stripe retries for about three weeks. Revoking on the first failure
     // punishes a card that expired.
     const plan = planFor(
-      event({ type: "invoice.payment_failed", objectId: "in_3", amountMinor: 33000 }),
+      signal({ kind: "instalment_failed", objectId: "in_3", amountMinor: 33000 }),
       instalmentOrder({
         status: "instalments_active",
         instalmentsPaid: 2,
@@ -201,7 +192,7 @@ describe("instalments", () => {
 
   it("completes a plan whose subscription ends having billed everything", () => {
     const plan = planFor(
-      event({ type: "customer.subscription.deleted", subscriptionEndedComplete: true }),
+      signal({ kind: "plan_ended", planCompleted: true }),
       instalmentOrder({ status: "instalments_active", instalmentsPaid: 4, amountPaidMinor: 132000 }),
     );
     assert.equal(plan.status, "completed");
@@ -210,7 +201,7 @@ describe("instalments", () => {
 
   it("revokes only when the plan ends short", () => {
     const plan = planFor(
-      event({ type: "customer.subscription.deleted", subscriptionEndedComplete: false }),
+      signal({ kind: "plan_ended", planCompleted: false }),
       instalmentOrder({
         status: "past_due",
         instalmentsPaid: 2,
@@ -226,7 +217,7 @@ describe("instalments", () => {
 describe("refunds and disputes", () => {
   it("revokes on a full refund", () => {
     const plan = planFor(
-      event({ type: "charge.refunded", objectId: "ch_1", amountRefundedMinor: 12000 }),
+      signal({ kind: "refunded", objectId: "ch_1", amountRefundedMinor: 12000 }),
       bankOrder({ status: "paid", amountPaidMinor: 12000 }),
     );
     assert.equal(plan.status, "refunded");
@@ -235,7 +226,7 @@ describe("refunds and disputes", () => {
 
   it("leaves access alone on a partial refund", () => {
     const plan = planFor(
-      event({ type: "charge.refunded", objectId: "ch_1", amountRefundedMinor: 4000 }),
+      signal({ kind: "refunded", objectId: "ch_1", amountRefundedMinor: 4000 }),
       bankOrder({ status: "paid", amountPaidMinor: 12000 }),
     );
     assert.equal(plan.status, undefined);
@@ -246,7 +237,7 @@ describe("refunds and disputes", () => {
   it("flags a dispute without revoking", () => {
     // Most disputes are somebody not recognising the statement descriptor.
     const plan = planFor(
-      event({ type: "charge.dispute.created", objectId: "dp_1", amountMinor: 12000 }),
+      signal({ kind: "disputed", objectId: "dp_1", amountMinor: 12000 }),
       bankOrder({ status: "paid", amountPaidMinor: 12000 }),
     );
     assert.equal(plan.entitlement, undefined);
@@ -256,23 +247,28 @@ describe("refunds and disputes", () => {
   });
 });
 
-describe("anything else", () => {
-  it("is acknowledged and dropped rather than throwing", () => {
-    // Stripe sends far more than we subscribe to, and `stripe trigger` fixtures
-    // carry no order at all. Neither may take the endpoint down.
-    const plan = planFor(event({ type: "customer.created" }), bankOrder());
-    assert.match(plan.ignored ?? "", /Unhandled event type/);
-    assert.equal(plan.status, undefined);
-    assert.equal(plan.entitlement, undefined);
-  });
-
-  it("handles every event type it asks Stripe to send", () => {
-    for (const type of HANDLED_EVENTS) {
-      const plan = planFor(event({ type }), instalmentOrder());
+describe("the signal vocabulary", () => {
+  it("has a branch for every signal a provider can send", () => {
+    // The nine signals are the contract between a provider's route and this
+    // module. A kind with no branch is a payment that silently does nothing,
+    // and GoCardless will be mapping onto these same nine. Event types we do
+    // not subscribe to never get this far: signalFor returns null for them in
+    // the route, so an unknown kind cannot be constructed here at all.
+    for (const kind of ALL_SIGNALS) {
+      const plan = planFor(signal({ kind }), instalmentOrder());
       assert.ok(
-        !/Unhandled event type/.test(plan.ignored ?? ""),
-        `${type} is subscribed to but has no branch`,
+        !/Unhandled signal/.test(plan.ignored ?? ""),
+        `${kind} has no branch in planFor`,
       );
     }
+  });
+
+  it("does nothing at all on a signal that arrives out of order", () => {
+    // Providers redeliver and reorder. An authorisation arriving after the
+    // money has settled must not walk the order backwards.
+    const settled = bankOrder({ status: "paid", amountPaidMinor: 12000 });
+    const plan = planFor(signal({ kind: "authorised", amountMinor: 12000 }), settled);
+    assert.equal(plan.status, undefined);
+    assert.equal(plan.entitlement, undefined);
   });
 });

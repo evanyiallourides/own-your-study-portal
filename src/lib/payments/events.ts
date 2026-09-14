@@ -1,32 +1,37 @@
 /* ==========================================================================
-   What a Stripe event means for an order
+   What a payment signal means for an order
    --------------------------------------------------------------------------
-   Kept apart from the route, and free of every Next and Stripe import, for the
-   same reason `recall/webhook.ts` is kept apart from its route: the decisions
-   are the part worth testing, and they are hard to test through an HTTP handler
-   holding a database connection.
+   Kept apart from the routes, and free of every Next and provider import, for
+   the same reason `recall/webhook.ts` is kept apart from its route: the
+   decisions are the part worth testing, and they are hard to test through an
+   HTTP handler holding a database connection.
 
-   The route normalises a Stripe event into `PaymentEvent` and executes the
-   `EventPlan` this returns. Nothing here reads or writes anything.
+   This deliberately does NOT switch on provider event names. Card checkout and
+   direct debit describe the same few things in completely different
+   vocabularies — Stripe says `checkout.session.async_payment_succeeded`,
+   GoCardless says `payments.confirmed` — but an order only ever wants to know
+   which of nine things happened. Each provider's route maps its own webhook
+   into a `PaymentSignal`; everything below is shared.
 
    Three rules are easy to get wrong and are therefore stated once, here:
 
-     1. An unpaid `checkout.session.completed` grants nothing. Buy-now-pay-later
-        settles asynchronously, so the session completes before the money moves.
-        The grant belongs to `async_payment_succeeded`, and forgetting that is
-        the single most likely bug in this integration — it would hand the
-        question banks to anyone who started a Klarna checkout and abandoned it.
+     1. Authorisation is not payment. A card clears in a second, but Klarna
+        settles later and a Bacs or BECS debit is authorised now and confirmed
+        several working days from now — and can still fail after that. Nothing
+        is granted on `authorised`. Getting this wrong hands 2,868 questions to
+        anyone who signs a mandate and cancels it.
 
-     2. A failed instalment does not revoke access. Stripe retries for about
-        three weeks; revoking on the first failure punishes an expired card.
-        Access goes only when the subscription is finally cancelled short.
+     2. A failed instalment does not revoke access. Providers retry for weeks;
+        revoking on the first failure punishes an expired card. Access goes only
+        when the plan is finally abandoned short.
 
-     3. A dispute is flagged, never auto-revoked. Most are a parent not
-        recognising the statement descriptor.
+     3. A dispute or chargeback is flagged, never auto-revoked. Most are a
+        parent not recognising the statement descriptor.
    ========================================================================== */
 
 export const ORDER_STATUSES = [
   "pending",
+  "authorised",
   "paid",
   "instalments_active",
   "past_due",
@@ -38,25 +43,48 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export type PaymentKind = "payment" | "refund" | "failure" | "dispute";
 
-/** A Stripe event reduced to the fields any decision here depends on. */
-export interface PaymentEvent {
-  type: string;
-  /** The session / invoice / charge the event is about. */
+/**
+ * The nine things that can happen to an order, in provider-neutral terms.
+ *
+ * Stripe and GoCardless map onto these as follows; the mapping itself lives in
+ * each provider's route, next to the payload it has to read.
+ *
+ *   authorised          session completed unpaid  ·  billing request fulfilled
+ *   settled             session paid / async ok   ·  payment confirmed
+ *   settlement_failed   async payment failed      ·  payment failed
+ *   instalment_settled  invoice.paid              ·  payment confirmed (on a plan)
+ *   instalment_failed   invoice.payment_failed    ·  payment failed (on a plan)
+ *   plan_ended          subscription.deleted      ·  subscription finished
+ *   refunded            charge.refunded           ·  refund created
+ *   disputed            charge.dispute.created    ·  payment charged back
+ *   abandoned           checkout.session.expired  ·  billing request expired
+ */
+export type SignalKind =
+  | "authorised"
+  | "settled"
+  | "settlement_failed"
+  | "instalment_settled"
+  | "instalment_failed"
+  | "plan_ended"
+  | "refunded"
+  | "disputed"
+  | "abandoned";
+
+export interface PaymentSignal {
+  kind: SignalKind;
+  /** The provider object this is about — payment, invoice, charge, refund. */
   objectId: string;
-  /** Checkout sessions only. */
-  paymentStatus?: "paid" | "unpaid" | "no_payment_required";
-  mode?: "payment" | "subscription";
   amountMinor?: number;
   currency?: string;
   taxMinor?: number;
-  /** How much of a charge has been refunded, for `charge.refunded`. */
+  /** For `refunded`: how much of the original has been returned. */
   amountRefundedMinor?: number;
-  /** Whether the subscription ended having billed everything it owed. */
-  subscriptionEndedComplete?: boolean;
+  /** For `plan_ended`: whether it finished rather than lapsed, when known. */
+  planCompleted?: boolean;
   detail?: string;
 }
 
-/** The order as it stands before this event is applied. */
+/** The order as it stands before this signal is applied. */
 export interface OrderState {
   id: string;
   plan: "full" | "instalments";
@@ -69,7 +97,7 @@ export interface OrderState {
 }
 
 export interface PaymentRow {
-  stripeObjectId: string;
+  providerObjectId: string;
   kind: PaymentKind;
   amountMinor: number;
   currency: string;
@@ -77,13 +105,9 @@ export interface PaymentRow {
 }
 
 export interface EventPlan {
-  /** New order status, or undefined to leave it alone. */
   status?: OrderStatus;
-  /** Added to amount_paid_minor. */
   addPaidMinor?: number;
-  /** Whether this event counts as one instalment being taken. */
   countsInstalment?: boolean;
-  /** Tax actually charged, when the event reports it. */
   taxMinor?: number;
   payment?: PaymentRow;
   /** Apply what the order granted, or take it back. */
@@ -95,73 +119,69 @@ export interface EventPlan {
 
 const nothing = (reason: string): EventPlan => ({ ignored: reason });
 
-/**
- * Whether a session that has just completed means money has actually arrived.
- * `no_payment_required` is a zero-value session, which the catalogue has none
- * of today but which would be a free grant if it ever did.
- */
-function sessionIsPaid(event: PaymentEvent): boolean {
-  return event.paymentStatus === "paid" || event.paymentStatus === "no_payment_required";
-}
+const currencyOf = (signal: PaymentSignal) => signal.currency ?? "usd";
 
-function settle(event: PaymentEvent, order: OrderState): EventPlan {
-  const amount = event.amountMinor ?? 0;
-  const subscription = event.mode === "subscription" || order.plan === "instalments";
+function settle(signal: PaymentSignal, order: OrderState): EventPlan {
+  const amount = signal.amountMinor ?? 0;
+  const onPlan = order.plan === "instalments";
 
   return {
-    status: subscription ? "instalments_active" : "paid",
+    status: onPlan ? "instalments_active" : "paid",
     addPaidMinor: amount,
-    countsInstalment: subscription,
-    taxMinor: event.taxMinor,
+    countsInstalment: onPlan,
+    taxMinor: signal.taxMinor,
     payment: {
-      stripeObjectId: event.objectId,
+      providerObjectId: signal.objectId,
       kind: "payment",
       amountMinor: amount,
-      currency: event.currency ?? "usd",
-      detail: subscription ? "First instalment" : "Paid in full",
+      currency: currencyOf(signal),
+      detail: onPlan ? "First instalment" : "Paid in full",
     },
-    // Instalment plans grant on the first payment. That is a deliberate credit
-    // decision for the tutoring packages, whose delivery is scheduled lessons
-    // that can be stopped — and precisely why the question bank, which is
-    // handed over the moment access is granted, has no instalment option.
+    // An instalment plan grants on the first settled payment. That is a
+    // deliberate credit decision for tutoring, whose delivery is scheduled
+    // lessons that can be stopped — and precisely why the question bank, handed
+    // over the moment access is granted, has no instalment option.
     entitlement: order.grantsQuestionBankDays !== null ? "grant" : undefined,
   };
 }
 
-export function planFor(event: PaymentEvent, order: OrderState): EventPlan {
-  switch (event.type) {
-    case "checkout.session.completed":
-      if (!sessionIsPaid(event)) {
-        // Buy-now-pay-later, or a delayed bank debit. Nothing has moved yet.
-        return nothing("Session completed but not yet paid; awaiting settlement.");
-      }
-      return settle(event, order);
+export function planFor(signal: PaymentSignal, order: OrderState): EventPlan {
+  switch (signal.kind) {
+    case "authorised":
+      // The customer has committed and nothing has arrived. For a card this
+      // state lasts a moment; for a direct debit, most of a week.
+      return order.status === "pending"
+        ? { status: "authorised" }
+        : nothing("Already past authorisation.");
 
-    case "checkout.session.async_payment_succeeded":
-      return settle(event, order);
+    case "settled":
+      return settle(signal, order);
 
-    case "checkout.session.async_payment_failed":
+    case "settlement_failed":
       return {
         status: "cancelled",
         payment: {
-          stripeObjectId: event.objectId,
+          providerObjectId: signal.objectId,
           kind: "failure",
-          amountMinor: event.amountMinor ?? order.amountTotalMinor,
-          currency: event.currency ?? "usd",
-          detail: event.detail ?? "Deferred payment failed.",
+          amountMinor: signal.amountMinor ?? order.amountTotalMinor,
+          currency: currencyOf(signal),
+          detail: signal.detail ?? "The payment failed after it was authorised.",
         },
-        notifyAdmins: { kind: "payment_failed", detail: "A buy-now-pay-later payment failed." },
+        notifyAdmins: {
+          kind: "payment_failed",
+          detail: "An authorised payment failed to settle.",
+        },
       };
 
-    case "checkout.session.expired":
-      // Only ever an abandoned checkout. Anything further on has already been
-      // paid, and a late expiry event must not undo it.
+    case "abandoned":
+      // Only ever an unfinished checkout. Anything further on has been
+      // authorised or paid, and a late expiry must not undo it.
       return order.status === "pending"
-        ? { status: "cancelled", ignored: undefined }
-        : nothing("Session expired but the order had already progressed.");
+        ? { status: "cancelled" }
+        : nothing("Checkout expired but the order had already progressed.");
 
-    case "invoice.paid": {
-      const amount = event.amountMinor ?? 0;
+    case "instalment_settled": {
+      const amount = signal.amountMinor ?? 0;
       const paid = order.amountPaidMinor + amount;
       const taken = order.instalmentsPaid + 1;
       const finished =
@@ -173,12 +193,12 @@ export function planFor(event: PaymentEvent, order: OrderState): EventPlan {
         status: finished ? "completed" : "instalments_active",
         addPaidMinor: amount,
         countsInstalment: true,
-        taxMinor: event.taxMinor,
+        taxMinor: signal.taxMinor,
         payment: {
-          stripeObjectId: event.objectId,
+          providerObjectId: signal.objectId,
           kind: "payment",
           amountMinor: amount,
-          currency: event.currency ?? "usd",
+          currency: currencyOf(signal),
           detail:
             order.instalmentMonths !== null
               ? `Instalment ${Math.min(taken, order.instalmentMonths)} of ${order.instalmentMonths}`
@@ -187,28 +207,28 @@ export function planFor(event: PaymentEvent, order: OrderState): EventPlan {
       };
     }
 
-    case "invoice.payment_failed":
+    case "instalment_failed":
       return {
         status: "past_due",
         payment: {
-          stripeObjectId: event.objectId,
+          providerObjectId: signal.objectId,
           kind: "failure",
-          amountMinor: event.amountMinor ?? 0,
-          currency: event.currency ?? "usd",
-          detail: event.detail ?? "Instalment payment failed.",
+          amountMinor: signal.amountMinor ?? 0,
+          currency: currencyOf(signal),
+          detail: signal.detail ?? "Instalment payment failed.",
         },
         notifyAdmins: {
           kind: "payment_failed",
           detail:
             `Instalment ${order.instalmentsPaid + 1} of ` +
-            `${order.instalmentMonths ?? "?"} failed. Stripe will retry.`,
+            `${order.instalmentMonths ?? "?"} failed. The provider will retry.`,
         },
-        // No entitlement change. Stripe retries for weeks.
+        // No entitlement change. Retries run for weeks.
       };
 
-    case "customer.subscription.deleted": {
+    case "plan_ended": {
       const paidInFull =
-        event.subscriptionEndedComplete ?? order.amountPaidMinor >= order.amountTotalMinor;
+        signal.planCompleted ?? order.amountPaidMinor >= order.amountTotalMinor;
       if (paidInFull) return { status: "completed" };
       return {
         status: "cancelled",
@@ -220,52 +240,41 @@ export function planFor(event: PaymentEvent, order: OrderState): EventPlan {
       };
     }
 
-    case "charge.refunded": {
-      const refunded = event.amountRefundedMinor ?? event.amountMinor ?? 0;
+    case "refunded": {
+      const refunded = signal.amountRefundedMinor ?? signal.amountMinor ?? 0;
       const full = refunded >= order.amountPaidMinor && refunded > 0;
       return {
         status: full ? "refunded" : undefined,
         payment: {
-          stripeObjectId: event.objectId,
+          providerObjectId: signal.objectId,
           kind: "refund",
           amountMinor: refunded,
-          currency: event.currency ?? "usd",
+          currency: currencyOf(signal),
           detail: full ? "Refunded in full" : "Partial refund",
         },
         entitlement: full && order.grantsQuestionBankDays !== null ? "revoke" : undefined,
       };
     }
 
-    case "charge.dispute.created":
+    case "disputed":
       return {
         payment: {
-          stripeObjectId: event.objectId,
+          providerObjectId: signal.objectId,
           kind: "dispute",
-          amountMinor: event.amountMinor ?? 0,
-          currency: event.currency ?? "usd",
-          detail: event.detail ?? "Payment disputed.",
+          amountMinor: signal.amountMinor ?? 0,
+          currency: currencyOf(signal),
+          detail: signal.detail ?? "Payment disputed.",
         },
         notifyAdmins: {
           kind: "payment_failed",
-          detail: "A payment was disputed. Respond in the Stripe dashboard.",
+          detail: "A payment was disputed or charged back. Respond with the provider.",
         },
-        // Not revoked: most disputes are a parent not recognising the descriptor.
+        // Not revoked: most disputes are somebody not recognising the descriptor.
       };
 
-    default:
-      return nothing(`Unhandled event type: ${event.type}`);
+    default: {
+      const unreachable: never = signal.kind;
+      return nothing(`Unhandled signal: ${String(unreachable)}`);
+    }
   }
 }
-
-/** The event types worth subscribing to. Anything else is acknowledged and dropped. */
-export const HANDLED_EVENTS = [
-  "checkout.session.completed",
-  "checkout.session.async_payment_succeeded",
-  "checkout.session.async_payment_failed",
-  "checkout.session.expired",
-  "invoice.paid",
-  "invoice.payment_failed",
-  "customer.subscription.deleted",
-  "charge.refunded",
-  "charge.dispute.created",
-] as const;

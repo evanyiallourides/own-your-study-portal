@@ -16,6 +16,15 @@
 -- administrator links it by hand, when the webhook finds a profile that already
 -- matches, or on its own the first time that person signs in.
 --
+-- Nothing here names Stripe. Card checkout and direct debit are both coming —
+-- GoCardless for the second — and they are not variations on one flow: a card
+-- is authorised and captured in a second, while a Bacs or BECS debit is
+-- authorised now and confirmed several working days later, and can still fail
+-- after that. So an order records which provider it belongs to and keeps that
+-- provider's identifiers in neutrally-named columns, and `authorised` exists
+-- as a state distinct from `paid` because for direct debit it is a state a
+-- real order sits in for most of a week.
+--
 -- Money is stored in minor units of the currency it was charged in, never
 -- converted on the way in. A sale in euros is a sale in euros; converting at
 -- write time bakes in a rate nobody can reproduce later, and the only rate the
@@ -23,35 +32,57 @@
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
--- customers — the Stripe customer, and the portal person if we know them yet
+-- Which payment provider an order belongs to.
+--
+-- A check constraint rather than an enum, deliberately. Adding a provider to an
+-- enum needs `alter type ... add value`, which cannot run in the same
+-- transaction that goes on to use the value — the reason the notification kinds
+-- needed their own migration. Widening a check constraint is an ordinary
+-- transactional statement.
+-- ---------------------------------------------------------------------------
+create domain public.payment_provider as text
+  check (value in ('stripe', 'gocardless'));
+
+-- ---------------------------------------------------------------------------
+-- customers — the provider's customer, and the portal person if we know them
 -- ---------------------------------------------------------------------------
 create table public.customers (
-  stripe_customer_id text primary key,
-  email              text not null,
-  name               text,
+  id                  uuid primary key default gen_random_uuid(),
+  provider            public.payment_provider not null,
+  provider_customer_id text not null,
+  email               text not null,
+  name                text,
   -- Nullable, and deliberately not unique: one person can buy twice under two
-  -- addresses and end up with two Stripe customers. Merging them is an
-  -- administrator's judgement, not something a constraint should force.
-  profile_id         uuid references public.profiles (id) on delete set null,
-  created_at         timestamptz not null default now(),
-  updated_at         timestamptz not null default now()
+  -- addresses, or once by card and once by direct debit, and end up with two
+  -- customer records. Merging them is an administrator's judgement, not
+  -- something a constraint should force.
+  profile_id          uuid references public.profiles (id) on delete set null,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  unique (provider, provider_customer_id)
 );
 
 create index customers_email_idx on public.customers (lower(email));
 create index customers_profile_idx on public.customers (profile_id);
 
 comment on table public.customers is
-  'Stripe customers. Email is the only join to a portal profile at the moment '
-  'of purchase, because buyers are anonymous until they are invited.';
+  'A customer as one payment provider knows them. Email is the only join to a '
+  'portal profile at the moment of purchase, because buyers are anonymous '
+  'until they are invited.';
 
 -- ---------------------------------------------------------------------------
 -- orders
 -- ---------------------------------------------------------------------------
 create type public.order_status as enum (
-  'pending',              -- checkout session created, nothing paid
-  'paid',                 -- paid outright
-  'instalments_active',   -- first instalment taken, schedule running
-  'past_due',             -- an instalment failed; Stripe is still retrying
+  'pending',              -- checkout started, nothing authorised
+  -- Authorised but not yet settled. A card skips through this in a second; a
+  -- Bacs or BECS debit sits here for several working days and can still fail
+  -- afterwards. Entitlements are NOT granted in this state — see the comment on
+  -- grants_question_bank_days.
+  'authorised',
+  'paid',                 -- settled outright
+  'instalments_active',   -- first instalment settled, plan running
+  'past_due',             -- an instalment failed; the provider is retrying
   'completed',            -- paid in full, including the last instalment
   'refunded',
   'cancelled'
@@ -60,11 +91,19 @@ create type public.order_status as enum (
 create table public.orders (
   id                              uuid primary key default gen_random_uuid(),
 
-  stripe_checkout_session_id      text unique,
-  stripe_payment_intent_id        text,
-  stripe_subscription_id          text,
-  stripe_subscription_schedule_id text,
-  stripe_customer_id              text references public.customers (stripe_customer_id),
+  provider                        public.payment_provider not null,
+  -- Stripe: the Checkout Session. GoCardless: the billing request.
+  provider_checkout_id            text,
+  -- Stripe: the PaymentIntent. GoCardless: the payment.
+  provider_payment_id             text,
+  provider_subscription_id        text,
+  -- Stripe: the subscription schedule that caps an instalment plan.
+  -- GoCardless subscriptions take a count instead, so this stays null there.
+  provider_schedule_id            text,
+  -- GoCardless only: the direct debit mandate every payment is taken against.
+  -- It outlives the order, which is what makes a second purchase one click.
+  provider_mandate_id             text,
+  customer_id                     uuid references public.customers (id),
 
   -- The catalogue lives in TypeScript, so this is not a foreign key. The name
   -- is snapshotted beside it: renaming a package later must not rewrite what
@@ -85,6 +124,11 @@ create table public.orders (
 
   -- Denormalised from the catalogue at purchase. What was bought does not
   -- change when the catalogue does.
+  --
+  -- Granted on settlement, never on authorisation. A direct debit is authorised
+  -- days before the money arrives and can fail after that, so granting on
+  -- authorisation would hand over 2,868 questions on the strength of a signed
+  -- mandate. That is also why the question bank has no instalment option.
   grants_question_bank_days       integer check (grants_question_bank_days is null or grants_question_bank_days > 0),
 
   status                          public.order_status not null default 'pending',
@@ -105,8 +149,15 @@ create table public.orders (
 create index orders_buyer_email_idx on public.orders (lower(buyer_email));
 create index orders_status_idx on public.orders (status);
 create index orders_student_idx on public.orders (student_id);
-create index orders_subscription_idx on public.orders (stripe_subscription_id)
-  where stripe_subscription_id is not null;
+create unique index orders_provider_checkout_idx
+  on public.orders (provider, provider_checkout_id)
+  where provider_checkout_id is not null;
+
+create index orders_subscription_idx on public.orders (provider, provider_subscription_id)
+  where provider_subscription_id is not null;
+
+create index orders_mandate_idx on public.orders (provider_mandate_id)
+  where provider_mandate_id is not null;
 
 -- This partial index *is* the unmatched-payments queue: money taken, nobody to
 -- give it to. It is the only part of the admin screen that requires action.
@@ -123,7 +174,7 @@ comment on table public.orders is
 create table public.order_payments (
   id               uuid primary key default gen_random_uuid(),
   order_id         uuid not null references public.orders (id) on delete cascade,
-  stripe_object_id text not null,
+  provider_object_id text not null,
   kind             text not null check (kind in ('payment', 'refund', 'failure', 'dispute')),
   amount_minor     integer not null,
   currency         text not null,
@@ -133,10 +184,11 @@ create table public.order_payments (
   tax_minor        integer,
   occurred_at      timestamptz not null default now(),
   detail           text,
-  -- Makes double-counting the first instalment impossible by construction:
-  -- checkout.session.completed and invoice.paid both describe it, and whichever
-  -- arrives second is rejected rather than added.
-  unique (order_id, stripe_object_id, kind)
+  -- Makes double-counting impossible by construction. On Stripe,
+  -- checkout.session.completed and invoice.paid both describe the first
+  -- instalment; on GoCardless a payment is reported as submitted and again as
+  -- confirmed. Whichever arrives second is rejected rather than added.
+  unique (order_id, provider_object_id, kind)
 );
 
 create index order_payments_order_idx on public.order_payments (order_id, occurred_at desc);

@@ -88,10 +88,10 @@ async function payFor(
   { email = "buyer@example.com", status = "paid", days = 365 as number | null } = {},
 ): Promise<void> {
   await db.exec(`insert into public.orders
-    (sku_slug, sku_name, plan, currency, amount_total_minor, buyer_email, status,
-     grants_question_bank_days)
-    values ('${slug}', '${slug}', 'full', 'usd', 12000, '${email}', '${status}',
-            ${days === null ? "null" : days})`);
+    (provider, sku_slug, sku_name, plan, currency, amount_total_minor, buyer_email,
+     status, grants_question_bank_days)
+    values ('stripe', '${slug}', '${slug}', 'full', 'usd', 12000, '${email}',
+            '${status}', ${days === null ? "null" : days})`);
 }
 
 /** Days from now until the entitlement lapses. */
@@ -164,6 +164,19 @@ describe("the migrations", () => {
       0,
       "no policy on orders may mention tutors",
     );
+  });
+
+  it("names no provider in a column, so a second one needs no migration", async () => {
+    // GoCardless is coming. Direct debit authorises now and settles days later,
+    // so it cannot reuse Stripe's identifiers or Stripe's timing — but it can
+    // reuse every one of these columns.
+    const columns = await db.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+        where table_schema = 'public'
+          and table_name in ('orders', 'customers', 'order_payments')
+          and column_name like '%stripe%'`,
+    );
+    assert.deepEqual(columns.rows, [], "a provider name leaked into a column name");
   });
 
   it("keeps every anonymous buyer's email to administrators", async () => {

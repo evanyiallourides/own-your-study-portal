@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 
 import { env, isDemoMode } from "@/lib/env";
-import { planFor, type OrderState, type PaymentEvent } from "@/lib/payments/events";
+import { planFor, type OrderState, type PaymentSignal } from "@/lib/payments/events";
 import {
   claimOrderForBuyer,
   notifyAdmins,
@@ -15,8 +15,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 /* ==========================================================================
    POST /api/webhooks/stripe
    --------------------------------------------------------------------------
-   Where money becomes an entitlement. Built to the same four properties as the
-   Recall webhook next door, for the same reasons:
+   Where a Stripe payment becomes an entitlement. Built to the same four
+   properties as the Recall webhook next door, for the same reasons:
 
      · Verified — the raw body is checked against the Stripe signature before it
        is parsed. No secret configured means every request is refused, because
@@ -28,8 +28,10 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
      · Always 2xx once accepted — a 5xx makes Stripe retry an event we have
        already stored. Failures are recorded and surfaced to administrators.
 
-   What each event *means* is in lib/payments/events.ts, which has no imports
-   and a test file. This module only normalises, loads, and writes.
+   This module's own job is narrow: verify, map Stripe's vocabulary onto the
+   provider-neutral signals in lib/payments/events.ts, and write what comes
+   back. What a signal *means* is decided there, shared with every other
+   provider, and tested without a database.
    ========================================================================== */
 
 export const runtime = "nodejs";
@@ -43,61 +45,80 @@ function idOf(value: string | { id: string } | null | undefined): string | null 
   return typeof value === "string" ? value : value.id;
 }
 
-/** Reduce a Stripe event to the fields any decision depends on. */
-function normalise(event: Stripe.Event): PaymentEvent | null {
+/**
+ * Stripe's event vocabulary, mapped onto the nine things an order cares about.
+ *
+ * Returns null for everything we do not subscribe to, which is most of it.
+ */
+function signalFor(event: Stripe.Event): PaymentSignal | null {
   const object = event.data.object as unknown as Record<string, unknown>;
 
   switch (event.type) {
     case "checkout.session.completed":
-    case "checkout.session.async_payment_succeeded":
-    case "checkout.session.async_payment_failed":
-    case "checkout.session.expired": {
+    case "checkout.session.async_payment_succeeded": {
       const session = object as unknown as Stripe.Checkout.Session;
       // payment_status is widened with an escape hatch for statuses Stripe has
-      // not invented yet. Anything unrecognised must fall through as undefined,
-      // which reads as "not paid" — the only safe default for a paywall.
+      // not invented yet. Anything unrecognised must read as not-yet-paid,
+      // which is the only safe default for a paywall.
       const reported: string = session.payment_status;
-      const paymentStatus =
-        reported === "paid" || reported === "unpaid" || reported === "no_payment_required"
-          ? reported
-          : undefined;
+      const settled = reported === "paid" || reported === "no_payment_required";
       return {
-        type: event.type,
+        // A completed session that is not yet paid is a buy-now-pay-later or a
+        // delayed debit: committed, but no money has moved.
+        kind: settled ? "settled" : "authorised",
         objectId: session.id,
-        paymentStatus,
-        mode: session.mode === "subscription" ? "subscription" : "payment",
         amountMinor: session.amount_total ?? 0,
         currency: session.currency ?? undefined,
         taxMinor: session.total_details?.amount_tax ?? 0,
       };
     }
 
-    case "invoice.paid":
+    case "checkout.session.async_payment_failed": {
+      const session = object as unknown as Stripe.Checkout.Session;
+      return {
+        kind: "settlement_failed",
+        objectId: session.id,
+        amountMinor: session.amount_total ?? 0,
+        currency: session.currency ?? undefined,
+      };
+    }
+
+    case "checkout.session.expired":
+      return { kind: "abandoned", objectId: (object.id as string) ?? event.id };
+
+    case "invoice.paid": {
+      const invoice = object as unknown as Stripe.Invoice;
+      return {
+        kind: "instalment_settled",
+        objectId: invoice.id ?? event.id,
+        amountMinor: invoice.amount_paid ?? 0,
+        currency: invoice.currency ?? undefined,
+      };
+    }
+
     case "invoice.payment_failed": {
       const invoice = object as unknown as Stripe.Invoice;
       return {
-        type: event.type,
+        kind: "instalment_failed",
         objectId: invoice.id ?? event.id,
-        amountMinor:
-          event.type === "invoice.paid" ? invoice.amount_paid ?? 0 : invoice.amount_due ?? 0,
+        amountMinor: invoice.amount_due ?? 0,
         currency: invoice.currency ?? undefined,
-        taxMinor: 0,
       };
     }
 
     case "customer.subscription.deleted": {
       const subscription = object as unknown as Stripe.Subscription;
-      // Deliberately no subscriptionEndedComplete. Stripe cancels a schedule
-      // that finished and one that lapsed with the same event and the same
-      // status, so the only trustworthy answer is whether the order was paid
-      // off — which planFor works out from the order itself.
-      return { type: event.type, objectId: subscription.id };
+      // Deliberately no planCompleted. Stripe cancels a schedule that finished
+      // and one that lapsed with the same event and the same status, so the
+      // only trustworthy answer is whether the order was paid off — which
+      // planFor works out from the order itself.
+      return { kind: "plan_ended", objectId: subscription.id };
     }
 
     case "charge.refunded": {
       const charge = object as unknown as Stripe.Charge;
       return {
-        type: event.type,
+        kind: "refunded",
         objectId: charge.id,
         amountMinor: charge.amount,
         amountRefundedMinor: charge.amount_refunded,
@@ -108,7 +129,7 @@ function normalise(event: Stripe.Event): PaymentEvent | null {
     case "charge.dispute.created": {
       const dispute = object as unknown as Stripe.Dispute;
       return {
-        type: event.type,
+        kind: "disputed",
         objectId: dispute.id,
         amountMinor: dispute.amount,
         currency: dispute.currency,
@@ -117,7 +138,7 @@ function normalise(event: Stripe.Event): PaymentEvent | null {
     }
 
     default:
-      return { type: event.type, objectId: event.id };
+      return null;
   }
 }
 
@@ -139,7 +160,8 @@ async function findOrderId(
     const { data } = await db
       .from("orders")
       .select("id")
-      .eq("stripe_subscription_id", subscriptionId)
+      .eq("provider", PROVIDER)
+      .eq("provider_subscription_id", subscriptionId)
       .maybeSingle();
     if (data?.id) return data.id as string;
   }
@@ -149,7 +171,8 @@ async function findOrderId(
     const { data } = await db
       .from("orders")
       .select("id")
-      .eq("stripe_payment_intent_id", paymentIntentId)
+      .eq("provider", PROVIDER)
+      .eq("provider_payment_id", paymentIntentId)
       .maybeSingle();
     if (data?.id) return data.id as string;
   }
@@ -226,6 +249,12 @@ export async function POST(request: NextRequest) {
   };
 
   try {
+    const signal = signalFor(event);
+    if (!signal) {
+      await finish("ignored", `Not subscribed to ${event.type}.`);
+      return NextResponse.json({ ok: true, ignored: true });
+    }
+
     const orderId = await findOrderId(db, event);
     if (!orderId) {
       // `stripe trigger` fixtures land here, as does any event for something we
@@ -258,20 +287,13 @@ export async function POST(request: NextRequest) {
       grantsQuestionBankDays: row.grants_question_bank_days,
     };
 
-    const normalised = normalise(event);
-    if (!normalised) {
-      await finish("ignored", `Could not read a ${event.type} payload.`, orderId);
-      return NextResponse.json({ ok: true, ignored: true });
-    }
-
-    const plan = planFor(normalised, order);
+    const plan = planFor(signal, order);
 
     /* -- Whatever the event was, record what Stripe now knows about the buyer.
           The order was created before they typed anything. -- */
-    const session =
-      event.type.startsWith("checkout.session.")
-        ? (event.data.object as unknown as Stripe.Checkout.Session)
-        : null;
+    const session = event.type.startsWith("checkout.session.")
+      ? (event.data.object as unknown as Stripe.Checkout.Session)
+      : null;
 
     const updates: Record<string, unknown> = {};
     if (session) {
@@ -281,23 +303,31 @@ export async function POST(request: NextRequest) {
       if (session.customer_details?.address?.country) {
         updates.buyer_country = session.customer_details.address.country;
       }
-      const customerId = idOf(session.customer);
-      if (customerId) {
-        updates.stripe_customer_id = customerId;
-        await db.from("customers").upsert(
-          {
-            stripe_customer_id: customerId,
-            email: session.customer_details?.email ?? session.customer_email ?? "",
-            name: session.customer_details?.name ?? null,
-          },
-          { onConflict: "stripe_customer_id" },
-        );
+
+      const providerCustomerId = idOf(session.customer);
+      if (providerCustomerId) {
+        const { data: customer } = await db
+          .from("customers")
+          .upsert(
+            {
+              provider: PROVIDER,
+              provider_customer_id: providerCustomerId,
+              email: email ?? "",
+              name: session.customer_details?.name ?? null,
+            },
+            { onConflict: "provider,provider_customer_id" },
+          )
+          .select("id")
+          .maybeSingle();
+        if (customer?.id) updates.customer_id = customer.id;
       }
+
       const paymentIntentId = idOf(session.payment_intent);
-      if (paymentIntentId) updates.stripe_payment_intent_id = paymentIntentId;
+      if (paymentIntentId) updates.provider_payment_id = paymentIntentId;
+
       const subscriptionId = idOf(session.subscription);
       if (subscriptionId) {
-        updates.stripe_subscription_id = subscriptionId;
+        updates.provider_subscription_id = subscriptionId;
 
         /* Checkout can only open an OPEN-ENDED subscription. Until this runs,
            "4 monthly payments" is a subscription that bills every month for
@@ -311,9 +341,7 @@ export async function POST(request: NextRequest) {
             subscriptionId,
             row.instalment_months,
           );
-          if (capped.scheduleId) {
-            updates.stripe_subscription_schedule_id = capped.scheduleId;
-          }
+          if (capped.scheduleId) updates.provider_schedule_id = capped.scheduleId;
           if (capped.problem) {
             updates.note = `Instalment plan NOT capped: ${capped.problem}`;
             await notifyAdmins(
@@ -342,7 +370,7 @@ export async function POST(request: NextRequest) {
       // The unique index makes a redelivery a no-op rather than a double count.
       await db.from("order_payments").insert({
         order_id: orderId,
-        stripe_object_id: plan.payment.stripeObjectId,
+        provider_object_id: plan.payment.providerObjectId,
         kind: plan.payment.kind,
         amount_minor: plan.payment.amountMinor,
         currency: plan.payment.currency,
