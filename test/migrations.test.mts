@@ -246,3 +246,125 @@ describe("claim_orders_for_profile", () => {
     assert.equal(Number(n), 1);
   });
 });
+
+describe("transcript retention", () => {
+  /** A lesson that ended `days` ago, with a transcript against it. */
+  async function lessonWithTranscript(id: string, endedDaysAgo: number): Promise<void> {
+    await db.exec(`
+      insert into public.lessons (id, student_id, tutor_id, subject_id, scheduled_at, ended_at,
+                                  duration_minutes, status)
+      select '${id}', s.id, t.id, sub.id,
+             now() - interval '${endedDaysAgo} days',
+             now() - interval '${endedDaysAgo} days',
+             60, 'published'
+        from public.students s, public.tutors t, public.subjects sub
+       limit 1;
+      insert into public.transcripts (lesson_id, raw_transcript, speaker_segments_json, duration_seconds)
+      values ('${id}', 'Tutor: and what did you get for part b?',
+              '[{"speaker":"tutor","text":"and what did you get for part b?"}]'::jsonb, 3600);
+    `);
+  }
+
+  async function transcript(id: string) {
+    return one<{ raw: string | null; segments: unknown[]; purged: string | null; seconds: number }>(
+      `select raw_transcript as raw, speaker_segments_json as segments,
+              purged_at as purged, duration_seconds as seconds
+         from public.transcripts where lesson_id = '${id}'`,
+    );
+  }
+
+  before(async () => {
+    // A tutor and a subject to hang lessons off; the students already exist.
+    await db.exec(`
+      insert into auth.users (id, email) values
+        ('22222222-2222-2222-2222-222222222222', 'tutor@example.com')
+        on conflict do nothing;
+      insert into public.profiles (id, email, first_name, last_name, role)
+        values ('22222222-2222-2222-2222-222222222222', 'tutor@example.com', 'Tam', 'Tutor', 'tutor')
+        on conflict (id) do nothing;
+      insert into public.tutors (profile_id) values ('22222222-2222-2222-2222-222222222222')
+        on conflict do nothing;
+      insert into public.subjects (name, curriculum) values ('Chemistry', 'IB')
+        on conflict do nothing;
+    `);
+    await db.exec(`update public.app_settings set transcript_retention_days = 365`);
+  });
+
+  it("leaves a recent transcript alone", async () => {
+    await lessonWithTranscript("aaaaaaaa-0000-4000-8000-000000000001", 30);
+    await one(`select public.purge_expired_transcripts() as n`);
+    const t = await transcript("aaaaaaaa-0000-4000-8000-000000000001");
+    assert.ok(t.raw, "a 30-day-old transcript should still be readable");
+    assert.equal(t.purged, null);
+  });
+
+  it("removes the verbatim content once it is past the window", async () => {
+    await lessonWithTranscript("aaaaaaaa-0000-4000-8000-000000000002", 400);
+    const { n } = await one<{ n: number }>(`select public.purge_expired_transcripts() as n`);
+    assert.equal(Number(n), 1);
+
+    const t = await transcript("aaaaaaaa-0000-4000-8000-000000000002");
+    assert.equal(t.raw, null, "the words a child said should be gone");
+    assert.deepEqual(t.segments, [], "and so should the speaker segments");
+    assert.ok(t.purged, "with a record of when");
+  });
+
+  it("keeps the row, so the lesson still knows a transcript existed", async () => {
+    const t = await transcript("aaaaaaaa-0000-4000-8000-000000000002");
+    assert.equal(Number(t.seconds), 3600, "duration is not personal and is worth keeping");
+  });
+
+  it("does not touch the reviewed lesson notes", async () => {
+    // The write-up is what a student studies from months later, and it has been
+    // through a tutor. The transcript is the raw material. That difference is
+    // the entire reason this is a retention window and not a delete button.
+    await db.exec(`
+      insert into public.lesson_notes (lesson_id, summary, tutor_reviewed)
+      values ('aaaaaaaa-0000-4000-8000-000000000002', 'Covered equilibrium and Le Chatelier.', true)
+      on conflict (lesson_id) do nothing;
+    `);
+    await one(`select public.purge_expired_transcripts() as n`);
+    const notes = await one<{ summary: string }>(
+      `select summary from public.lesson_notes
+        where lesson_id = 'aaaaaaaa-0000-4000-8000-000000000002'`,
+    );
+    assert.match(notes.summary, /Le Chatelier/);
+  });
+
+  it("is idempotent, so running it twice purges nothing the second time", async () => {
+    await lessonWithTranscript("aaaaaaaa-0000-4000-8000-000000000003", 400);
+    const first = await one<{ n: number }>(`select public.purge_expired_transcripts() as n`);
+    const second = await one<{ n: number }>(`select public.purge_expired_transcripts() as n`);
+    assert.equal(Number(first.n), 1);
+    assert.equal(Number(second.n), 0, "an already-purged row must not be worked on again");
+  });
+
+  it("keeps everything when retention is turned off", async () => {
+    // A missing or zero setting has to mean keep, not delete. The wrong way
+    // round on a destructive job is unrecoverable.
+    await db.exec(`update public.app_settings set transcript_retention_days = 0`);
+    await lessonWithTranscript("aaaaaaaa-0000-4000-8000-000000000004", 5000);
+    const { n } = await one<{ n: number }>(`select public.purge_expired_transcripts() as n`);
+    assert.equal(Number(n), 0);
+    assert.ok((await transcript("aaaaaaaa-0000-4000-8000-000000000004")).raw);
+    await db.exec(`update public.app_settings set transcript_retention_days = 365`);
+  });
+
+  it("measures age from the lesson, not from when the transcript was written", async () => {
+    // A transcript that arrived late is still a record of a lesson that
+    // happened when it happened.
+    await lessonWithTranscript("aaaaaaaa-0000-4000-8000-000000000005", 400);
+    await db.exec(`update public.transcripts set created_at = now()
+                    where lesson_id = 'aaaaaaaa-0000-4000-8000-000000000005'`);
+    await one(`select public.purge_expired_transcripts() as n`);
+    const t = await transcript("aaaaaaaa-0000-4000-8000-000000000005");
+    assert.equal(t.raw, null, "a brand-new row about an old lesson should still purge");
+  });
+
+  it("cannot be run by a signed-in user", async () => {
+    const { ok } = await one<{ ok: boolean }>(
+      `select has_function_privilege('authenticated', 'public.purge_expired_transcripts()', 'execute') as ok`,
+    );
+    assert.equal(ok, false, "a destructive job must not be callable from the client");
+  });
+});

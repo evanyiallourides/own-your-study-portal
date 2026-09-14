@@ -180,10 +180,13 @@ export default async function AdminNotetaker() {
                 "Bot joins",
                 `It appears in the participant list as "${settings.notetakerDisplayName}". There is no hidden recording.`,
               ],
-              ["Transcript produced", "Speaker-labelled, then stored against the lesson."],
               [
-                "Media discarded",
-                `Audio and video are kept only long enough to transcribe — ${settings.mediaRetentionHours} hours at most. The portal stores no playable recording.`,
+                "Transcript produced",
+                `Speaker-labelled, then stored against the lesson${settings.transcriptRetentionDays > 0 ? ` and removed after ${settings.transcriptRetentionDays} days` : ""}.`,
+              ],
+              [
+                "No media kept",
+                "The bot is asked for a transcript and nothing else, so no audio or video ever reaches the portal. There is no recording to play back and none to delete.",
               ],
               ["Draft written", "The transcript is analysed into a structured write-up."],
               [

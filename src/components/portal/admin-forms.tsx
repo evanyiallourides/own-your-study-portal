@@ -554,10 +554,14 @@ export function SettingsForm({ settings }: { settings: AppSettings }) {
               }
               className="field"
             />
+            <p className="mt-1.5 text-xs text-ink-300">
+              Enforced nightly: past this, the words spoken in a lesson are removed and the
+              tutor&rsquo;s written notes are kept. Set it to 0 to keep transcripts indefinitely.
+            </p>
           </div>
           <div>
             <label htmlFor="media-hours" className="field-label">
-              Keep meeting media for (hours)
+              Meeting media (hours)
             </label>
             <input
               id="media-hours"
@@ -571,8 +575,9 @@ export function SettingsForm({ settings }: { settings: AppSettings }) {
               className="field"
             />
             <p className="mt-1.5 text-xs text-ink-300">
-              Audio and video exist only long enough to produce a transcript. The portal keeps no
-              playable recording and offers no video library.
+              For the record only &mdash; the portal never receives audio or video, so it has
+              none to delete. The notetaker asks its provider for a transcript and nothing else,
+              and how long that provider holds the media is set with them, not here.
             </p>
           </div>
         </div>
