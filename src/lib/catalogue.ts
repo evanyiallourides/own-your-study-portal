@@ -62,8 +62,9 @@ export type Money = Record<Currency, number>;
    wins when the visitor's own currency is one of the four — this is the
    fallback, and what a JS-disabled visitor sees.
 
-   "own-your-atar" is listed but has no sub-site yet: it is an is-soon entry in
-   the division switcher. AUD reaches buyers today only by location.
+   "own-your-atar" quotes AUD GST-inclusive, and its site now ships, so the
+   checkout sees site=own-your-atar&ccy=aud on its CTAs rather than reaching
+   Australian buyers by location alone.
    -------------------------------------------------------------------------- */
 
 export const DIVISION_BASE: Readonly<Record<string, Currency>> = {
@@ -379,6 +380,35 @@ export const GST_RATE = 0.1;
 
 export function gstComponent(audAmount: number): number {
   return audAmount / 11;
+}
+
+/**
+ * The Stripe Tax product code, which decides *who* pays GST.
+ *
+ * This is not a formality. Stripe treats "Educational Services" and "Tutoring"
+ * as services performed at the seller's location, so an Australian seller
+ * charges 10% GST to a student in London, New York and Berlin alike. Verified
+ * against Stripe's tax calculation API — those two codes return GST for every
+ * buyer country tested; the remote-delivery codes below return it only for AU.
+ *
+ * Everything here is delivered online to a student who is not in Australia, so
+ * the remote codes are the ones that describe what is actually sold:
+ *
+ *   hours !== null   live sessions over video, however they are packaged
+ *   question-bank    written content the student works through unaided
+ *   profile-review   a written review returned by email, no session
+ *
+ * The consequence of getting it wrong is not a rounding error: the account
+ * default alone would have declared roughly a ninth of all worldwide revenue
+ * as GST owed to the ATO.
+ *
+ * A tax code is a tax position. This one is the honest description of the
+ * service; whether the ATO agrees is a question for an accountant.
+ */
+export function taxCodeFor(sku: Sku): string {
+  if (sku.hours !== null) return "txcd_20060045"; // Training Services - Live Virtual
+  if (sku.grants) return "txcd_20060058"; // Training Services - Self-study Web-based
+  return "txcd_20060000"; // Professional Services
 }
 
 /* --------------------------------------------------------------------------

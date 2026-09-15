@@ -36,7 +36,7 @@ import Stripe from "stripe";
 /* The catalogue is TypeScript. test/alias-hooks.mjs is the loader that lets
    Node import it directly — it lives under test/ because that is what needed it
    first, but there is nothing test-specific about it. */
-import { CATALOGUE, CURRENCIES, amountFor, toMinorUnits } from "../src/lib/catalogue.ts";
+import { CATALOGUE, CURRENCIES, amountFor, taxCodeFor, toMinorUnits } from "../src/lib/catalogue.ts";
 import { STRIPE_PRICES } from "../src/lib/stripe-prices.generated.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -157,15 +157,25 @@ async function ensureProduct(sku) {
     if (error?.statusCode !== 404) throw error;
   }
 
-  const desired = { name: sku.name, description: sku.blurb };
+  // tax_code decides who is charged GST, not just how much. Left unset, the
+  // product inherits the account default, and the wrong default silently taxes
+  // every overseas student. It belongs on the product for the same reason the
+  // amount belongs on the price: so the Dashboard and the catalogue cannot
+  // drift apart without this script saying so.
+  const desired = { name: sku.name, description: sku.blurb, tax_code: taxCodeFor(sku) };
 
   if (!existing) {
     actions.push({ kind: "product+", what: sku.slug, detail: sku.name });
     if (apply) await stripe.products.create({ id, ...desired, metadata: { oys_slug: sku.slug } });
     return;
   }
-  if (existing.name !== desired.name || existing.description !== desired.description) {
-    actions.push({ kind: "product~", what: sku.slug, detail: "name or description changed" });
+  const changed = [
+    existing.name !== desired.name && "name",
+    existing.description !== desired.description && "description",
+    existing.tax_code !== desired.tax_code && `tax code → ${desired.tax_code}`,
+  ].filter(Boolean);
+  if (changed.length) {
+    actions.push({ kind: "product~", what: sku.slug, detail: changed.join(", ") });
     if (apply) await stripe.products.update(id, desired);
   }
 }

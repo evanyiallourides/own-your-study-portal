@@ -16,6 +16,7 @@ import {
   isSellable,
   priceIdFor,
   skuFor,
+  taxCodeFor,
   toMinorUnits,
   type Currency,
 } from "@/lib/catalogue";
@@ -360,5 +361,39 @@ describe("money", () => {
         `${c} formatted with a decimal point: ${formatMoney(1320, c)}`,
       );
     }
+  });
+});
+
+describe("tax codes", () => {
+  /* Stripe treats these two as services performed where the seller is, which
+     for an Australian company means 10% GST on a student in London. Confirmed
+     against Stripe's calculation API, not inferred from the names. Nothing sold
+     here is delivered in a room in Australia. */
+  const TAXED_AT_ORIGIN = new Set([
+    "txcd_20060052", // Educational Services
+    "txcd_20060059", // Tutoring
+  ]);
+
+  it("never puts a SKU on a code that taxes overseas students", () => {
+    for (const sku of CATALOGUE) {
+      const code = taxCodeFor(sku);
+      assert.ok(
+        !TAXED_AT_ORIGIN.has(code),
+        `${sku.slug} is on ${code}, which charges GST to every buyer on earth`,
+      );
+    }
+  });
+
+  it("gives every SKU a code", () => {
+    for (const sku of CATALOGUE) {
+      assert.match(taxCodeFor(sku), /^txcd_[0-9]+$/, `${sku.slug} has no usable tax code`);
+    }
+  });
+
+  it("separates live teaching from written deliverables", () => {
+    assert.equal(taxCodeFor(skuFor("elite-60s")!), "txcd_20060045", "120 hours of live sessions");
+    assert.equal(taxCodeFor(skuFor("single-session")!), "txcd_20060045", "one live hour");
+    assert.equal(taxCodeFor(skuFor("question-bank")!), "txcd_20060058", "worked through unaided");
+    assert.equal(taxCodeFor(skuFor("profile-review")!), "txcd_20060000", "returned by email");
   });
 });
