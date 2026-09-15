@@ -25,9 +25,15 @@ import { stripeConfigured } from "@/lib/payments/stripe";
    asks for.
 
    Instalment SKUs show two buttons, and the copy under them is not decoration.
-   Stripe does not allow Klarna, Zip or Afterpay in subscription mode, so
-   choosing to pay monthly really does mean card only, and saying so here is
-   cheaper than a surprise at the payment step.
+   Stripe allows no pay-later method in subscription mode — no Klarna, no Zip,
+   no Afterpay — so choosing to pay monthly gives up buy-now-pay-later, and
+   saying so here is cheaper than a surprise at the payment step.
+
+   It does not mean cards only. An Australian buyer is also offered PayTo,
+   which debits their bank account under a mandate they approve in their
+   banking app. Worth naming rather than hiding: Stripe caps its fee on PayTo
+   at A$3.50, against 1.7% on a card, and on a A$1,840 monthly instalment that
+   is the difference between A$3.50 and A$31.58 every month.
    ========================================================================== */
 
 export const dynamic = "force-dynamic";
@@ -180,10 +186,11 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
                   {sku.instalments.months} monthly payments of{" "}
                   {formatMoney(perInstalment, currency)}
                 </span>
-                {/* Not a footnote: Stripe does not permit pay-later methods in
-                    subscription mode, so this really is card only. */}
+                {/* Not a footnote: no pay-later method works in subscription
+                    mode, so this is the one place a buyer learns that paying
+                    monthly costs them Klarna, Zip and Afterpay. */}
                 <span className="mt-0.5 block text-xs text-ink-500">
-                  Card only · first payment today
+                  {currency === "aud" ? "Card or PayTo" : "Card only"} · first payment today
                 </span>
               </button>
             </form>
