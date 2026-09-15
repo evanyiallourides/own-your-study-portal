@@ -13,8 +13,11 @@
    invented lessons on a real domain. So each check says what it means, not
    just whether it passed.
 
-     node scripts/preflight.mjs
-     node scripts/preflight.mjs --env staging
+     npm run preflight
+     npm run preflight -- --env staging
+
+   Run through npm, not node: it reads the catalogue, which is TypeScript, and
+   needs test/alias-hooks.mjs to resolve it.
    ========================================================================== */
 
 import { execFileSync } from "node:child_process";
@@ -266,6 +269,44 @@ if (!stripeKey) {
       );
     }
   }
+}
+
+/* -- 7. which currencies can actually take money? ------------------------- */
+
+/* Cards are switched off, so a currency sells only if it has a direct debit
+   scheme that is activated. That makes "is this site able to sell?" a real
+   question with a per-currency answer, and the failure is silent: the buttons
+   simply are not there, and the first sign is sales that never arrive. */
+
+const { CATALOGUE, CURRENCIES, amountFor, offersPayInFull } = await import("../src/lib/catalogue.ts");
+const { bankDebitFor, schemeFor } = await import("../src/lib/payments/bank-debit.ts");
+
+const dark = [];
+for (const ccy of CURRENCIES) {
+  const scheme = schemeFor(ccy);
+  const sellable = CATALOGUE.filter((sku) => {
+    const full = offersPayInFull(sku) && bankDebitFor(ccy, amountFor(sku, ccy, "full")).ok;
+    const monthly = sku.instalments && bankDebitFor(ccy, amountFor(sku, ccy, "instalments")).ok;
+    return full || monthly;
+  }).length;
+
+  if (sellable === CATALOGUE.length) {
+    ok(`Sells in ${ccy.toUpperCase()}`, `all ${sellable} products · ${scheme.label}`);
+  } else if (sellable > 0) {
+    warn(`Sells in ${ccy.toUpperCase()}`, `only ${sellable} of ${CATALOGUE.length} products via ${scheme.label}`);
+  } else {
+    dark.push(ccy.toUpperCase());
+    const why = scheme
+      ? `${scheme.label} is not activated — request it at dashboard.stripe.com/settings/payment_methods`
+      : "no direct debit scheme is open to an Australian business (ACH is US/EU only)";
+    warn(`Sells in ${ccy.toUpperCase()}`, `NOTHING — ${why}`);
+  }
+}
+
+if (dark.length === CURRENCIES.length) {
+  stop("Storefront", "no currency can take a payment; every buy button is dead");
+} else if (dark.length) {
+  warn("Storefront", `${dark.join(", ")} cannot take any payment — those sites show no buy button`);
 }
 
 /* -- report --------------------------------------------------------------- */

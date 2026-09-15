@@ -363,6 +363,23 @@ export function offersInstalments(sku: Sku): boolean {
   return sku.instalments !== null;
 }
 
+/**
+ * Whether the whole amount can be taken in one charge.
+ *
+ * Elite cannot, and the reason is not squeamishness about the number. Payment
+ * is by direct debit, every scheme has a per-transaction ceiling, and at
+ * A$11,040 the programme is over PayTo's. Six charges of A$1,840 are not, so
+ * the plan that fits is the only one offered rather than a button that works
+ * in some currencies and not others depending on the exchange rate that week.
+ *
+ * The trade is real: the money arrives over six months instead of at once, and
+ * a buyer who would rather pay and be done has to ask. That is the decision,
+ * not an oversight.
+ */
+export function offersPayInFull(sku: Sku): boolean {
+  return sku.slug !== "elite-60s";
+}
+
 /** Stripe works in minor units. Every currency here has two decimal places. */
 export function toMinorUnits(amount: number): number {
   return Math.round(amount * 100);

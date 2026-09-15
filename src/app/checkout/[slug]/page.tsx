@@ -7,10 +7,12 @@ import {
   formatMoney,
   gstComponent,
   isCurrency,
+  offersPayInFull,
   priceIdFor,
   skuFor,
   type Currency,
 } from "@/lib/catalogue";
+import { bankDebitFor, explainRefusal } from "@/lib/payments/bank-debit";
 import { isDemoMode, stripeMode } from "@/lib/env";
 import { stripeConfigured } from "@/lib/payments/stripe";
 
@@ -24,16 +26,25 @@ import { stripeConfigured } from "@/lib/payments/stripe";
    blocked script, and it matches how little JavaScript the rest of this site
    asks for.
 
-   Instalment SKUs show two buttons, and the copy under them is not decoration.
-   Stripe allows no pay-later method in subscription mode — no Klarna, no Zip,
-   no Afterpay — so choosing to pay monthly gives up buy-now-pay-later, and
-   saying so here is cheaper than a surprise at the payment step.
+   Cards are not offered. Every button here charges a direct debit against the
+   buyer's own bank account — PayTo in Australia, SEPA in the euro zone, Bacs
+   in the UK — because the fee on those is capped and the fee on a card is not.
+   src/lib/payments/bank-debit.ts holds that decision, what it costs, and which
+   currencies have a scheme at all.
 
-   It does not mean cards only. An Australian buyer is also offered PayTo,
-   which debits their bank account under a mandate they approve in their
-   banking app. Worth naming rather than hiding: Stripe caps its fee on PayTo
-   at A$3.50, against 1.7% on a card, and on a A$1,840 monthly instalment that
-   is the difference between A$3.50 and A$31.58 every month.
+   Which is why a button can be missing. There is no direct debit scheme an
+   Australian business can use for US dollars, and each scheme has a ceiling a
+   single charge cannot exceed. Both buttons are therefore gated on their own
+   charge rather than on the package total: the largest programme is over
+   PayTo's limit paid at once and under it paid monthly, so the monthly button
+   survives where the other cannot. When neither can, the page says which
+   scheme is missing rather than showing a button the route would refuse.
+
+   Instalment SKUs otherwise show two buttons, and the copy under them is not
+   decoration — it names the scheme that will debit them, because a buyer who
+   does not recognise the name on their bank statement is a dispute waiting to
+   happen, and these disputes cannot be appealed.
+
    ========================================================================== */
 
 export const dynamic = "force-dynamic";
@@ -74,6 +85,17 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
   const instalmentsSellable =
     sellable && mode !== null && sku.instalments && priceIdFor(sku, "instalments", mode) !== null;
 
+  /* Each button is gated on its own charge, not on the package total. That
+     distinction is the whole point for the largest programme: A$11,040 is over
+     PayTo's ceiling in one go, while the same programme at six monthly charges
+     of A$1,840 is comfortably under it. Asking per charge is what lets the
+     monthly button stay when the pay-in-full button cannot. */
+  const fullBank = bankDebitFor(currency, total);
+  const instalmentBank =
+    perInstalment !== null ? bankDebitFor(currency, perInstalment) : null;
+  const canPayInFull = sellable && fullBank.ok && offersPayInFull(sku);
+  const canPayMonthly = Boolean(instalmentsSellable && instalmentBank?.ok);
+
   return (
     <div className="space-y-8">
       <header className="space-y-3">
@@ -103,17 +125,32 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
         )}
       </div>
 
-      {!sellable ? (
+      {!sellable || (!canPayInFull && !canPayMonthly) ? (
         <div className="rounded-2xl border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">
           <p className="font-semibold">Not on sale here yet.</p>
           <p className="mt-1">
             {isDemoMode()
               ? "This portal is running in demo mode, which cannot take payments."
-              : "Payments are still being set up on this deployment. Please get in touch and we will invoice you directly."}
+              : !sellable
+                ? "Payments are still being set up on this deployment. Please get in touch and we will invoice you directly."
+                : /* The specific reason, not a shrug. A buyer told which scheme
+                     is missing and in which currency can tell us something
+                     useful when they get in touch. */
+                  explainRefusal(
+                    fullBank.ok ? "over_limit" : fullBank.reason,
+                    fullBank.scheme,
+                    currency,
+                  )}
+          </p>
+          <p className="mt-3">
+            <a href="https://ownyourstudy.com/own-your-ib/contact.html" className="font-semibold underline underline-offset-2">
+              Get in touch
+            </a>
           </p>
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
+          {canPayInFull && (
           <form method="POST" action="/api/checkout" className="contents">
             <input type="hidden" name="sku" value={sku.slug} />
             <input type="hidden" name="plan" value="full" />
@@ -167,12 +204,13 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
                 Pay in full — {formatMoney(total, currency)}
               </span>
               <span className="mt-0.5 block text-xs opacity-80">
-                Card, Apple Pay, and pay-later options where available
+                {fullBank.ok ? fullBank.scheme.label : ""} · direct debit from your bank
               </span>
             </button>
           </form>
+          )}
 
-          {perInstalment !== null && sku.instalments && instalmentsSellable && (
+          {perInstalment !== null && sku.instalments && canPayMonthly && (
             <form method="POST" action="/api/checkout" className="contents">
               <input type="hidden" name="sku" value={sku.slug} />
               <input type="hidden" name="plan" value="instalments" />
@@ -190,7 +228,8 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
                     mode, so this is the one place a buyer learns that paying
                     monthly costs them Klarna, Zip and Afterpay. */}
                 <span className="mt-0.5 block text-xs text-ink-500">
-                  {currency === "aud" ? "Card or PayTo" : "Card only"} · first payment today
+                  {instalmentBank?.ok ? instalmentBank.scheme.label : "Direct debit"} · first
+                  payment today
                 </span>
               </button>
             </form>

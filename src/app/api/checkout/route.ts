@@ -4,6 +4,7 @@ import {
   amountFor,
   baseCurrencyFor,
   isCurrency,
+  offersPayInFull,
   priceIdFor,
   skuFor,
   toMinorUnits,
@@ -11,8 +12,8 @@ import {
   type Plan,
 } from "@/lib/catalogue";
 import { env, isDemoMode } from "@/lib/env";
+import { bankDebitFor, explainRefusal } from "@/lib/payments/bank-debit";
 import {
-  paymentMethodConfiguration,
   requireStripeMode,
   stripeClient,
   stripeConfigured,
@@ -113,6 +114,19 @@ export async function POST(request: NextRequest) {
     return refuse("That is not on sale yet. Please get in touch.", 503);
   }
 
+  /* Card is not on offer. Refuse here, before an order row exists, so an
+     unsellable combination leaves no pending row behind — and refuse in the
+     same words the page used, rather than letting Stripe reject the session
+     with a message written for a developer. */
+  if (plan === "full" && !offersPayInFull(sku)) {
+    return refuse("This programme is sold as a monthly plan.");
+  }
+
+  const bank = bankDebitFor(currency, amountFor(sku, currency, plan));
+  if (!bank.ok) {
+    return refuse(explainRefusal(bank.reason, bank.scheme, currency), 503);
+  }
+
   // Stripe charges from the price ID; this is recorded so the order says what
   // it was sold for without a round trip, and is reconciled from the session.
   const totalMinor = toMinorUnits(amountFor(sku, currency, "full")) * quantity;
@@ -166,7 +180,12 @@ export async function POST(request: NextRequest) {
         // Stripe Tax needs an address to decide whether Australian GST applies.
         automatic_tax: { enabled: true },
         billing_address_collection: "required",
-        payment_method_configuration: paymentMethodConfiguration(plan),
+        /* Named explicitly rather than left to the account's payment method
+           configuration. That configuration is a default Stripe is free to
+           widen — a method switched on in the Dashboard would silently start
+           appearing at checkout. Listing the one scheme means the only way a
+           card is ever offered again is an edit to this file. */
+        payment_method_types: [bank.scheme.method],
         /* Who is this for?
            The payer is often a parent. Without asking, a child's lessons end up
            on their mother's account and the question bank licence with them.
