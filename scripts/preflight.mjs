@@ -181,6 +181,93 @@ if (existsSync(path.join(here, "team.json"))) {
   warn("Team roster", "scripts/team.json not created yet — copy team.example.json when you are ready");
 }
 
+/* -- 6. can money actually reach the bank? -------------------------------- */
+
+/* Taking a payment and being paid are two different switches, and Stripe will
+   happily leave the second one off. Charges succeed, the balance climbs, and
+   nothing says so anywhere in the portal — the only symptom is money that
+   never arrives. So this section asks the two questions separately. */
+
+const stripeKey = local.STRIPE_SECRET_KEY;
+
+if (!stripeKey) {
+  warn("Stripe", "no STRIPE_SECRET_KEY locally — skipping the payment checks");
+} else {
+  const mode = stripeKey.startsWith("sk_live_") ? "live" : "test";
+  const api = async (endpoint) => {
+    const response = await fetch(`https://api.stripe.com${endpoint}`, {
+      headers: { Authorization: `Bearer ${stripeKey}` },
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const account = await api("/v1/account");
+  if (account.body?.error) {
+    stop("Stripe key", account.body.error.message);
+  } else {
+    const a = account.body;
+    ok("Stripe account", `${a.id} · ${a.country} · ${mode} mode`);
+
+    if (a.charges_enabled) ok("Taking payments", "enabled");
+    else stop("Taking payments", "charges are disabled — every buy button will fail at Stripe");
+
+    const balance = await api("/v1/balance");
+    const held = [...(balance.body.available ?? []), ...(balance.body.pending ?? [])]
+      .filter((b) => b.amount > 0)
+      .map((b) => `${b.currency.toUpperCase()} ${(b.amount / 100).toFixed(2)}`)
+      .join(", ");
+
+    if (a.payouts_enabled) {
+      const schedule = a.settings?.payouts?.schedule;
+      ok(
+        "Payouts",
+        `enabled · ${schedule?.interval ?? "?"}, ${schedule?.delay_days ?? "?"} day delay`
+          + (held ? ` · ${held} in the balance` : ""),
+      );
+    } else {
+      /* Not a warning. The business is taking real money it cannot withdraw,
+         and every further sale makes the number bigger. */
+      stop(
+        "Payouts",
+        `DISABLED${held ? ` — ${held} sitting in Stripe with no way out` : ""}. `
+          + "Usually a missing bank account: dashboard.stripe.com/settings/payouts",
+      );
+    }
+
+    const tax = await api("/v1/tax/settings");
+    if (tax.body?.status === "active") {
+      const regs = await api("/v1/tax/registrations?status=active&limit=20");
+      const countries = (regs.body.data ?? []).map((r) => r.country);
+      ok(
+        "Stripe Tax",
+        countries.length
+          ? `active · registered in ${countries.join(", ")}`
+          : "active, but registered nowhere — no sale will record any tax",
+      );
+      if (!countries.length) {
+        warn("GST", "no tax registration, so Australian sales record no GST for the BAS");
+      }
+    } else {
+      const pending = tax.body?.status_details?.pending?.missing_fields ?? [];
+      warn(
+        "Stripe Tax",
+        `${tax.body?.status ?? "unreadable"}${pending.length ? ` — missing ${pending.join(", ")}` : ""}`,
+      );
+    }
+
+    const hooks = await api("/v1/webhook_endpoints?limit=10");
+    const live = (hooks.body.data ?? []).filter((h) => h.status === "enabled");
+    if (live.length) {
+      ok("Stripe webhook", `${live.length} enabled · ${live[0].url}`);
+    } else {
+      stop(
+        "Stripe webhook",
+        "no enabled endpoint. Payments would succeed and nobody would ever be given access",
+      );
+    }
+  }
+}
+
 /* -- report --------------------------------------------------------------- */
 
 console.log(`\nPreflight${envName ? ` · ${envName}` : ""}\n`);
