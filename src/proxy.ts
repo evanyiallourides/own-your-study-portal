@@ -82,7 +82,18 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     /* Everything except static assets and image files. The webhook route is
-       matched but short-circuited by isPublic, so it keeps its raw body. */
-    "/((?!_next/static|_next/image|favicon.ico|brand/|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico)$).*)",
+       matched but short-circuited by isPublic, so it keeps its raw body.
+
+       `question-bank/` is the viewer scripts under public/ — qbank.js and
+       papers.js, 45 KB and 19 KB. They were being matched, which meant every
+       load of a bank paid for a Supabase getUser() round trip to fetch a file
+       that is already published unauthenticated on the marketing site. It cost
+       164ms against 4ms for a static chunk that skips this.
+
+       Note the singular. The paid content is served from `/api/question-banks/`
+       — plural, under /api — which is NOT excluded here and still checks the
+       signed-in student's access on every request. Excluding the viewer is not
+       excluding what it views. */
+    "/((?!_next/static|_next/image|favicon.ico|brand/|question-bank/|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico)$).*)",
   ],
 };

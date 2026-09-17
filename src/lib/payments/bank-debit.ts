@@ -108,7 +108,7 @@ export function explainRefusal(reason: Refusal, scheme: BankDebit | null, curren
     case "over_limit":
       return (
         `${scheme?.label} cannot take a single payment this large — its limit is ` +
-        `${scheme?.limit.toLocaleString()} ${currency.toUpperCase()}. Paying monthly ` +
+        `${scheme?.limit.toLocaleString("en-GB")} ${currency.toUpperCase()}. Paying monthly ` +
         `splits it into instalments that fit; otherwise get in touch and we will invoice you.`
       );
   }
