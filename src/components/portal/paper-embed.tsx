@@ -23,7 +23,7 @@ export function PaperEmbed({
   backHref?: string;
   viewHref?: string;
 }) {
-  useVanillaViewer("/question-bank/papers.js", "ppBoot");
+  useVanillaViewer("/question-bank/papers.js", "ppBoot", mode === "shelf" ? "pp-shelf" : "pp-root");
 
   const config = {
     "data-pp-base": "/api/papers/",

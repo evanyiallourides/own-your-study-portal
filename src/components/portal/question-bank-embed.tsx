@@ -38,7 +38,7 @@ export function QuestionBankEmbed({
   backHref?: string;
   viewHref?: string;
 }) {
-  useVanillaViewer("/question-bank/qbank.js", "qbBoot");
+  useVanillaViewer("/question-bank/qbank.js", "qbBoot", mode === "shelf" ? "qb-shelf" : "qb-root");
 
   const config = {
     "data-qb-base": "/api/question-banks/",

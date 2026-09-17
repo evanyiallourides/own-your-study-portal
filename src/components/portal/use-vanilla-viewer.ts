@@ -5,78 +5,112 @@ import { useEffect } from "react";
 /* ==========================================================================
    Mounting a vanilla viewer inside React
    --------------------------------------------------------------------------
-   The question bank and mock paper viewers are plain scripts that render
+   The question bank and mock paper viewers are plain scripts that draw
    themselves into an empty div. They are seven hundred lines of filtering,
-   marking and progress logic shared with the marketing site, and reimplementing
+   marking and progress logic shared with the marketing site; reimplementing
    them in React to avoid this file would be far worse than this file.
 
-   They were mounted with `<script src defer />` in the JSX, on the reasoning
-   that a deferred script needs no orchestration and should not depend on
-   hydration. Both halves of that turned out to be wrong here, in two different
-   ways, and the shelf was empty either way:
+   Three separate things broke a `<script src defer />` in the markup, and each
+   one on its own was enough to leave a paying student staring at an empty
+   shelf:
 
-     Arriving by a fresh page load, the script ran and populated the shelf
-     before React hydrated. React then found children it had not rendered,
-     reported a hydration mismatch, and did what that error says it does —
-     regenerated the subtree, discarding the viewer's markup.
+     1. On a fresh load the script ran before React hydrated. React then found
+        children it had not rendered, called it a hydration mismatch, and did
+        what that error says — regenerated the subtree, discarding the markup.
 
-     Arriving by a link inside the portal — which is how anyone actually gets
-     there — React had already hoisted and loaded the script on an earlier
-     page and does not execute a hoisted script twice. Nothing called the boot
-     function at all, so nothing was ever rendered.
+     2. Following a link inside the portal — how anyone actually arrives —
+        React had already hoisted and loaded the script on an earlier page, and
+        it does not execute a hoisted script twice. Nothing called boot at all.
 
-   So the script is loaded here instead of in the markup, and the boot function
-   is called on every mount rather than only when the file first executes.
-   Loading is shared: the tag is created once per src and later mounts reuse it,
-   which is the one thing React's hoisting did get right.
+     3. Worst, because it is intermittent: this portal has a hydration mismatch
+        on every page, so React discards the server DOM and rebuilds it. That
+        rebuild makes a *new* container element. Booting once on mount is not
+        enough — the element booted into gets thrown away afterwards, and no
+        effect re-runs to notice, so the shelf is populated or empty depending
+        on which finished first.
 
-   The container must also carry `dangerouslySetInnerHTML={{ __html: "" }}`.
-   That is not cargo cult — it is what tells React the children are not its to
-   diff, so a later re-render anywhere above cannot wipe the viewer out again.
+   Hence the observer. The invariant it maintains is simply: if the container
+   is on the page and empty, the viewer has not drawn into it yet, so boot.
+   That is true whichever of the above just happened, and stays true if React
+   replaces the element again later. Fixing the underlying mismatch would let
+   this go back to a single boot on mount; until then, do not weaken it to one.
    ========================================================================== */
 
 type BootFn = () => void;
 
-export function useVanillaViewer(src: string, bootName: string): void {
-  useEffect(() => {
-    let cancelled = false;
+/** Time a boot is allowed to be in flight before it is assumed to have failed. */
+const BOOT_GRACE_MS = 3_000;
+/** A failing fetch must not become an unbounded retry loop. */
+const MAX_BOOTS = 6;
 
-    const boot = () => {
-      if (cancelled) return;
+export function useVanillaViewer(src: string, bootName: string, containerId: string): void {
+  useEffect(() => {
+    let stopped = false;
+    let lastTarget: Element | null = null;
+    let lastBootAt = 0;
+    let boots = 0;
+
+    const scriptReady = (tag: HTMLScriptElement | null) => tag?.dataset.ready === "true";
+
+    const ensure = () => {
+      if (stopped || boots >= MAX_BOOTS) return;
+      const tag = document.querySelector<HTMLScriptElement>(selector);
+      if (!scriptReady(tag)) return;
+
+      const target = document.getElementById(containerId);
+      if (!target) return;
+
+      // Drawn into, and still the element we drew into: nothing to do.
+      if (target === lastTarget && target.children.length > 0) return;
+      // Same element, still empty, but the fetch may simply be in flight.
+      if (target === lastTarget && Date.now() - lastBootAt < BOOT_GRACE_MS) return;
+
       const fn = (window as unknown as Record<string, unknown>)[bootName];
-      // Re-booting is safe: each boot re-reads the container's data attributes
-      // and re-renders into it, which is also what makes a remount work.
-      if (typeof fn === "function") (fn as BootFn)();
+      if (typeof fn !== "function") return;
+
+      lastTarget = target;
+      lastBootAt = Date.now();
+      boots += 1;
+      // Re-reads the container's data attributes and redraws, which is what
+      // makes booting again after a remount or a rebuild the right answer.
+      (fn as BootFn)();
     };
 
     const selector = `script[data-vanilla-viewer="${CSS.escape(src)}"]`;
-    const existing = document.querySelector<HTMLScriptElement>(selector);
+    let tag = document.querySelector<HTMLScriptElement>(selector);
 
-    if (existing) {
-      if (existing.dataset.ready === "true") boot();
-      else existing.addEventListener("load", boot, { once: true });
-      return () => {
-        cancelled = true;
-        existing.removeEventListener("load", boot);
-      };
+    if (!tag) {
+      tag = document.createElement("script");
+      tag.src = src;
+      tag.async = false;
+      tag.dataset.vanillaViewer = src;
+      tag.addEventListener(
+        "load",
+        () => {
+          tag!.dataset.ready = "true";
+          ensure();
+        },
+        { once: true },
+      );
+      document.head.appendChild(tag);
+    } else if (scriptReady(tag)) {
+      ensure();
+    } else {
+      tag.addEventListener("load", ensure, { once: true });
     }
 
-    const tag = document.createElement("script");
-    tag.src = src;
-    tag.async = false;
-    tag.dataset.vanillaViewer = src;
-    tag.addEventListener(
-      "load",
-      () => {
-        tag.dataset.ready = "true";
-        boot();
-      },
-      { once: true },
-    );
-    document.head.appendChild(tag);
+    const observer = new MutationObserver(ensure);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // The observer sees React replace the container, but not a boot that
+    // silently produced nothing; this covers the latter without polling on.
+    const retry = window.setInterval(ensure, 1_000);
 
     return () => {
-      cancelled = true;
+      stopped = true;
+      observer.disconnect();
+      window.clearInterval(retry);
+      tag?.removeEventListener("load", ensure);
     };
-  }, [src, bootName]);
+  }, [src, bootName, containerId]);
 }
