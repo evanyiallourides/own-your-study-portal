@@ -1,5 +1,9 @@
+"use client";
+
 import "@/styles/qbank.css";
 import "@/styles/qbank-embed.css";
+
+import { useVanillaViewer } from "@/components/portal/use-vanilla-viewer";
 
 /**
  * The question bank viewer, mounted inside the portal.
@@ -19,6 +23,11 @@ import "@/styles/qbank-embed.css";
  * The three data attributes are how it is told, rather than globals set by an
  * inline script: nothing has to run before the script loads, so there is no
  * ordering to get wrong.
+ *
+ * The script is loaded and booted by useVanillaViewer rather than by a
+ * `<script>` in this markup. That comment is worth reading before changing it
+ * back — the markup version rendered an empty shelf on every route into this
+ * page, in two different ways.
  */
 export function QuestionBankEmbed({
   mode,
@@ -29,31 +38,27 @@ export function QuestionBankEmbed({
   backHref?: string;
   viewHref?: string;
 }) {
+  useVanillaViewer("/question-bank/qbank.js", "qbBoot");
+
   const config = {
     "data-qb-base": "/api/question-banks/",
     ...(viewHref ? { "data-qb-view": viewHref } : {}),
     ...(backHref ? { "data-qb-back": backHref } : {}),
   };
 
+  // Children of these divs belong to the viewer, not to React.
+  const opaque = { dangerouslySetInnerHTML: { __html: "" } };
+
   return (
     <div className="qb-embed">
       {mode === "shelf" ? (
         <>
-          <div className="qb-shelf" id="qb-shelf" {...config} />
+          <div className="qb-shelf" id="qb-shelf" {...config} {...opaque} />
           <div className="qb-empty" id="qb-shelf-empty" hidden />
         </>
       ) : (
-        <div id="qb-root" {...config} />
+        <div id="qb-root" {...config} {...opaque} />
       )}
-
-      {/* A plain deferred script, not next/script.
-        *
-        * The viewer is vanilla JavaScript that needs no orchestration, and
-        * next/script's afterInteractive strategy injects the tag from the
-        * client bundle — so a page whose hydration is slow or fails shows an
-        * empty shelf and no error. `defer` runs it after parsing without
-        * depending on React at all. */}
-      <script src="/question-bank/qbank.js" defer />
     </div>
   );
 }

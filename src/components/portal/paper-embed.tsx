@@ -1,5 +1,9 @@
+"use client";
+
 import "@/styles/qbank.css";
 import "@/styles/qbank-embed.css";
+
+import { useVanillaViewer } from "@/components/portal/use-vanilla-viewer";
 
 /**
  * The mock-paper viewer, mounted inside the portal.
@@ -19,28 +23,29 @@ export function PaperEmbed({
   backHref?: string;
   viewHref?: string;
 }) {
+  useVanillaViewer("/question-bank/papers.js", "ppBoot");
+
   const config = {
     "data-pp-base": "/api/papers/",
     ...(viewHref ? { "data-pp-view": viewHref } : {}),
     ...(backHref ? { "data-pp-back": backHref } : {}),
   };
 
+  // Children of these divs belong to the viewer, not to React.
+  const opaque = { dangerouslySetInnerHTML: { __html: "" } };
+
   return (
     <div className="qb-embed">
       {mode === "shelf" ? (
         <>
-          <div className="pp-shelf" id="pp-shelf" {...config} />
+          <div className="pp-shelf" id="pp-shelf" {...config} {...opaque} />
           <div className="qb-empty" id="pp-shelf-empty" hidden />
         </>
       ) : (
         <div className="pp-app" style={{ padding: 0 }}>
-          <div id="pp-root" {...config} />
+          <div id="pp-root" {...config} {...opaque} />
         </div>
       )}
-
-      {/* Plain and deferred, not next/script: the viewer is vanilla JavaScript
-        * and should not wait on — or fail with — React hydration. */}
-      <script src="/question-bank/papers.js" defer />
     </div>
   );
 }
