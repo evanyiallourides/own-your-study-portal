@@ -94,6 +94,21 @@ export interface OrderState {
   amountTotalMinor: number;
   amountPaidMinor: number;
   grantsQuestionBankDays: number | null;
+  /** IA review credits, per unit of quantity. */
+  grantsIaMarkings: number | null;
+}
+
+/**
+ * Whether this order gave the buyer anything that can be taken back.
+ *
+ * Asked as one question rather than by naming a column, because naming a
+ * column is how the second entitlement gets forgotten: `grants_ia_markings`
+ * was added to the orders table and every revoke path still tested only the
+ * question bank, so a refunded IA review would have left its credits behind.
+ * A third grant should change this function and nothing else.
+ */
+function grantsSomething(order: OrderState): boolean {
+  return order.grantsQuestionBankDays !== null || order.grantsIaMarkings !== null;
 }
 
 export interface PaymentRow {
@@ -141,7 +156,7 @@ function settle(signal: PaymentSignal, order: OrderState): EventPlan {
     // deliberate credit decision for tutoring, whose delivery is scheduled
     // lessons that can be stopped — and precisely why the question bank, handed
     // over the moment access is granted, has no instalment option.
-    entitlement: order.grantsQuestionBankDays !== null ? "grant" : undefined,
+    entitlement: grantsSomething(order) ? "grant" : undefined,
   };
 }
 
@@ -232,7 +247,7 @@ export function planFor(signal: PaymentSignal, order: OrderState): EventPlan {
       if (paidInFull) return { status: "completed" };
       return {
         status: "cancelled",
-        entitlement: order.grantsQuestionBankDays !== null ? "revoke" : undefined,
+        entitlement: grantsSomething(order) ? "revoke" : undefined,
         notifyAdmins: {
           kind: "payment_failed",
           detail: "An instalment plan ended before it was paid off.",
@@ -252,7 +267,7 @@ export function planFor(signal: PaymentSignal, order: OrderState): EventPlan {
           currency: currencyOf(signal),
           detail: full ? "Refunded in full" : "Partial refund",
         },
-        entitlement: full && order.grantsQuestionBankDays !== null ? "revoke" : undefined,
+        entitlement: full && grantsSomething(order) ? "revoke" : undefined,
       };
     }
 

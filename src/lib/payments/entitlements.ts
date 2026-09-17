@@ -70,12 +70,18 @@ export async function revokeOrderEntitlement(db: Db, orderId: string): Promise<v
     .from("question_bank_access")
     .update({ granted: false, note: "Revoked: payment refunded or plan cancelled." })
     .eq("order_id", orderId);
+
+  /* IA review credits come back too, but only the ones not yet spent — the
+     rule lives in SQL so that "a refund does not claw back a review the
+     student has already read" is stated once. Ignored on failure: a database
+     that has not run the IA migration yet must not fail a refund. */
+  await db.rpc("revoke_ia_credits_for_order", { p_order_id: orderId });
 }
 
 /** Tell every administrator something needs a human. */
 export async function notifyAdmins(
   db: Db,
-  kind: "payment_received" | "payment_failed" | "order_unmatched",
+  kind: "payment_received" | "payment_failed" | "order_unmatched" | "ia_review_requested",
   title: string,
   body: string,
 ): Promise<void> {

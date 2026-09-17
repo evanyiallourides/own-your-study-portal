@@ -143,6 +143,9 @@ export async function POST(request: NextRequest) {
       currency,
       amount_total_minor: totalMinor,
       grants_question_bank_days: sku.grants?.questionBankDays ?? null,
+      // Per unit. claim_orders_for_profile() multiplies by quantity, so a
+      // student buying three reviews for three sciences receives three.
+      grants_ia_markings: sku.grants?.iaMarkings ?? null,
       provider: "stripe",
       status: "pending",
       // Overwritten from the session once Stripe has collected it. Not null,
@@ -205,6 +208,26 @@ export async function POST(request: NextRequest) {
             type: "text",
             optional: true,
             text: { maximum_length: 120 },
+          },
+          /* Only meaningful when the two fields above are filled in, and it is
+             what decides whether the buyer gets an account of their own.
+
+             Asked rather than assumed: paying for somebody's tuition and being
+             entitled to watch how they are getting on are different things,
+             and a payment cannot tell a parent from an employer. A yes creates
+             a parent account linked to the student; anything else — including
+             leaving it alone — creates only the student's. */
+          {
+            key: "is_guardian",
+            label: { type: "custom", custom: "Are you their parent or guardian?" },
+            type: "dropdown",
+            optional: true,
+            dropdown: {
+              options: [
+                { label: "Yes — give me a parent account", value: "yes" },
+                { label: "No — just buying on their behalf", value: "no" },
+              ],
+            },
           },
         ],
         client_reference_id: order.id,

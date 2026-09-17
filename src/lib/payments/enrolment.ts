@@ -16,6 +16,14 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
    So checkout asks who the student is, and leaves it blank when they are the
    same person. This resolves the two into one answer, and creates the account
    when there is not one yet.
+
+   When the buyer names somebody else they are asked one more thing: whether
+   they are that student's parent or guardian. A yes earns them an account of
+   their own and a link to the child, which is what the parent dashboard reads.
+   A no does not: somebody paying for an adult friend's tuition has bought
+   lessons, not a standing view of how they are getting on. The buyer asserts
+   the relationship because nobody else is in a position to — and an
+   administrator can undo it on the student's page.
    ========================================================================== */
 
 export interface StudentIdentity {
@@ -24,6 +32,20 @@ export interface StudentIdentity {
   lastName: string;
   /** True when the buyer named somebody else at checkout. */
   boughtForSomeoneElse: boolean;
+}
+
+/**
+ * The buyer, when they told us they are the student's parent or guardian.
+ *
+ * Only ever produced alongside a student who is somebody else: a buyer who is
+ * the student is not their own parent.
+ */
+export interface ParentIdentity {
+  email: string;
+  firstName: string;
+  lastName: string;
+  /** The student they bought for, lower-cased, as recorded on the order. */
+  studentEmail: string;
 }
 
 /** Nothing clever — enough to reject a typo, not enough to reject a real address. */
@@ -71,6 +93,47 @@ export function resolveStudent(input: {
   };
 }
 
+/**
+ * The buyer as a parent, when they said they are one.
+ *
+ * Three things all have to hold, and each rules out a case that would
+ * otherwise hand somebody a child's records:
+ *
+ *   · they ticked the box — an unanswered question is not a yes;
+ *   · they named a student who is somebody else — nobody parents themselves;
+ *   · their own address parses — an invitation to a typo reaches a stranger.
+ *
+ * The student's identity is resolved first and passed in, so the two answers
+ * cannot disagree about which address the child has.
+ */
+export function resolveParent(input: {
+  buyerEmail: string;
+  buyerName: string | null;
+  isGuardian: boolean;
+  student: StudentIdentity | null;
+}): ParentIdentity | null {
+  if (!input.isGuardian) return null;
+  if (!input.student?.boughtForSomeoneElse) return null;
+
+  const email = input.buyerEmail.trim().toLowerCase();
+  if (!looksLikeEmail(email)) return null;
+  if (email === input.student.email) return null;
+
+  const { firstName, lastName } = splitName(input.buyerName);
+  return { email, firstName, lastName, studentEmail: input.student.email };
+}
+
+/**
+ * How the guardian question came back from checkout.
+ *
+ * Stripe hands every custom field over as a string, and an unanswered optional
+ * field simply is not there. Anything that is not an explicit yes is a no — the
+ * safe direction for a question whose yes grants access to a child's records.
+ */
+export function readGuardianAnswer(value: string | null | undefined): boolean {
+  return (value ?? "").trim().toLowerCase() === "yes";
+}
+
 export type EnrolResult =
   | { status: "invited"; email: string }
   | { status: "exists"; email: string }
@@ -91,6 +154,32 @@ export async function enrolPaidBuyer(
   db: SupabaseClient,
   student: StudentIdentity,
 ): Promise<EnrolResult> {
+  return invite(db, student, "student");
+}
+
+/**
+ * Invite the buyer as a parent of the student they bought for.
+ *
+ * Deliberately the same machinery and the same setting as the student's
+ * invitation: they are two halves of one event, and a deployment that has
+ * turned automatic enrolment off should not quietly keep creating half of it.
+ *
+ * Accepting this builds the profile and the `parents` row. The link to the
+ * child is made separately, by `link_parent_for_profile()` in the database,
+ * because whichever of the two accepts second is the one that can make it.
+ */
+export async function enrolPaidParent(
+  db: SupabaseClient,
+  parent: ParentIdentity,
+): Promise<EnrolResult> {
+  return invite(db, parent, "parent");
+}
+
+async function invite(
+  db: SupabaseClient,
+  person: { email: string; firstName: string; lastName: string },
+  role: "student" | "parent",
+): Promise<EnrolResult> {
   const { data: settings } = await db
     .from("app_settings")
     .select("auto_invite_paid_buyers")
@@ -102,12 +191,12 @@ export async function enrolPaidBuyer(
   }
 
   const admin = createSupabaseAdminClient();
-  const { error } = await admin.auth.admin.inviteUserByEmail(student.email, {
+  const { error } = await admin.auth.admin.inviteUserByEmail(person.email, {
     redirectTo: `${env.appUrl.replace(/\/$/, "")}/auth/callback`,
     data: {
-      role: "student",
-      first_name: student.firstName,
-      last_name: student.lastName,
+      role,
+      first_name: person.firstName,
+      last_name: person.lastName,
     },
   });
 
@@ -115,10 +204,10 @@ export async function enrolPaidBuyer(
     // Already registered is not a failure — it means somebody else created the
     // account between the payment and this call, and the claim will find it.
     if (/already been registered/i.test(error.message)) {
-      return { status: "exists", email: student.email };
+      return { status: "exists", email: person.email };
     }
     return { status: "failed", reason: error.message };
   }
 
-  return { status: "invited", email: student.email };
+  return { status: "invited", email: person.email };
 }

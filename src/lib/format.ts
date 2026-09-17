@@ -120,3 +120,24 @@ export function toDateTimeLocalValue(iso: string): string {
 export function pluralise(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+/**
+ * Money held in minor units, as it is stored on an order.
+ *
+ * Cents appear only when there are cents. Package prices are whole by
+ * construction, so a trailing ".00" everywhere would be noise; a tax line or a
+ * part-refund is not whole, and rounding it on a screen somebody checks against
+ * their bank statement would be a lie rather than a tidy-up.
+ *
+ * `catalogue.formatMoney` is the marketing-side sibling: major units, a closed
+ * set of currencies, never any cents.
+ */
+export function formatMoneyMinor(minor: number, currency: string): string {
+  const digits = minor % 100 === 0 ? 0 : 2;
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(minor / 100);
+}

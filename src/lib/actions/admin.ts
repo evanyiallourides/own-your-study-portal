@@ -86,6 +86,67 @@ export async function createAssignment(
   }
 }
 
+/* -- families ------------------------------------------------------------- */
+
+const familyLinkSchema = z.object({
+  parentId: z.string().min(1),
+  studentId: z.string().min(1),
+  relationship: z.string().trim().max(60).optional(),
+});
+
+/**
+ * Link a parent to a child by hand.
+ *
+ * A purchase normally does this on its own, so this is for the cases it cannot
+ * cover: an order taken before the question was asked, a buyer who said no and
+ * meant yes, or a second guardian who never paid for anything.
+ */
+export async function linkParentToStudent(
+  input: z.input<typeof familyLinkSchema>,
+): Promise<ActionResult> {
+  await requireRole("admin");
+  const parsed = familyLinkSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Choose a parent and a student." };
+
+  try {
+    const repo = await getRepository();
+    await repo.linkParentToStudent(
+      parsed.data.parentId,
+      parsed.data.studentId,
+      parsed.data.relationship?.trim() || null,
+    );
+    revalidatePath(`/admin/students/${parsed.data.studentId}`);
+    revalidatePath("/parent");
+    return { ok: true };
+  } catch (error) {
+    return toActionError(error);
+  }
+}
+
+/**
+ * Remove one, which is the undo for a link a payment created.
+ *
+ * Nothing about the order changes: the money was still theirs and the student
+ * keeps what it bought. Only the sight of the child goes away.
+ */
+export async function unlinkParentFromStudent(
+  input: z.input<typeof familyLinkSchema>,
+): Promise<ActionResult> {
+  await requireRole("admin");
+  const parsed = familyLinkSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Choose a parent and a student." };
+
+  try {
+    const repo = await getRepository();
+    await repo.unlinkParentFromStudent(parsed.data.parentId, parsed.data.studentId);
+    revalidatePath(`/admin/students/${parsed.data.studentId}`);
+    revalidatePath("/parent");
+    return { ok: true };
+  } catch (error) {
+    return toActionError(error);
+  }
+}
+
 export async function setAssignmentActive(input: {
   assignmentId: string;
   active: boolean;

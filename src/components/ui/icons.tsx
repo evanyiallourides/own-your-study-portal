@@ -52,6 +52,14 @@ export const ChartIcon = ({ className }: IconProps) => (
   </svg>
 );
 
+export const CardIcon = ({ className }: IconProps) => (
+  <svg {...base(className)}>
+    <rect x="3" y="5.5" width="18" height="13" rx="1.8" />
+    <path d="M3 10h18" />
+    <path d="M6.5 14.5h3" />
+  </svg>
+);
+
 export const FolderIcon = ({ className }: IconProps) => (
   <svg {...base(className)}>
     <path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18V6.5Z" />

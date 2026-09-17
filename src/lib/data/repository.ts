@@ -17,6 +17,7 @@ import type {
   Order,
   OrderPayment,
   OrderStatus,
+  Parent,
   AppSettings,
   Assignment,
   HomeworkItem,
@@ -37,6 +38,9 @@ import type {
   Transcript,
   Tutor,
   QuestionBankAccess,
+  IaCreditLedger,
+  IaSubmission,
+  IaSubmissionWithReviews,
 } from "@/lib/types";
 
 export interface LessonFilter {
@@ -118,6 +122,20 @@ export interface UploadFileInput {
   body: ArrayBuffer;
 }
 
+export interface CreateIaSubmissionInput {
+  studentId: string;
+  subject: IaSubmission["subject"];
+  level: IaSubmission["level"];
+  session: string;
+  stage: IaSubmission["stage"];
+  storagePath: string;
+  fileName: string;
+  fileSize: number;
+  fileHash: string;
+  wordCount: number | null;
+  studentNote: string | null;
+}
+
 /** Thrown when the caller is not allowed to do something. Surfaced to the user
  *  as a 403-shaped page, never as a raw database message. */
 export class AccessDeniedError extends Error {
@@ -158,12 +176,42 @@ export interface Repository {
   listStudentSubjects(studentId: string): Promise<Subject[]>;
   addStudentSubject(studentId: string, subjectId: string): Promise<void>;
 
+  /* -- families --
+     A purchase can create a parent account and link it to the child it was
+     bought for, so there has to be somewhere to see that link and undo it. */
+  listParents(search?: string): Promise<Parent[]>;
+  listParentsForStudent(studentId: string): Promise<Parent[]>;
+  linkParentToStudent(parentId: string, studentId: string, relationship: string | null): Promise<void>;
+  unlinkParentFromStudent(parentId: string, studentId: string): Promise<void>;
+
   /* -- question banks -- */
   getQuestionBankAccess(studentId: string): Promise<QuestionBankAccess>;
   setQuestionBankAccess(
     studentId: string,
     input: { granted: boolean; expiresAt: string | null; note: string | null },
   ): Promise<void>;
+
+  /* -- IA review --
+     `spendIaCredit` is separate from `saveIaReview` rather than folded into
+     it, because the order matters and is the whole of the guarantee that a
+     failed review is free: the review is stored first, the credit is taken
+     second, and a crash between the two leaves a student holding a review they
+     were not charged for. That is the right way round for it to fail. */
+  getIaCredits(studentId: string): Promise<IaCreditLedger>;
+  grantIaCredits(studentId: string, count: number, note: string): Promise<void>;
+  spendIaCredit(studentId: string, note: string): Promise<number>;
+
+  listIaSubmissions(filter?: { studentId?: string; escalatedOnly?: boolean }): Promise<IaSubmissionWithReviews[]>;
+  getIaSubmission(submissionId: string): Promise<IaSubmissionWithReviews | null>;
+  createIaSubmission(input: CreateIaSubmissionInput): Promise<IaSubmission>;
+  setIaSubmissionStatus(
+    submissionId: string,
+    status: IaSubmission["status"],
+    failureNote?: string | null,
+  ): Promise<void>;
+  /** Store a finished review. Returns its id so the credit can be tied to it. */
+  saveIaReview(submissionId: string, review: unknown): Promise<string>;
+  requestProfessionalReview(submissionId: string): Promise<void>;
 
   /* -- orders -- */
   listOrders(filter?: { status?: OrderStatus[]; unmatchedOnly?: boolean }): Promise<Order[]>;

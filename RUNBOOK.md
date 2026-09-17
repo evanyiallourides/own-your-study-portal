@@ -357,6 +357,28 @@ Recall's request and response shapes have changed between versions — check
 `createBot` and `fetchTranscript` against their current docs on a throwaway
 lesson before using it on a real one.
 
+### IA review
+
+1. `OPENAI_API_KEY` — the same key the notetaker uses. Without it the upload
+   form refuses rather than taking a credit, so nobody is charged for a review
+   that cannot run.
+2. `npm run stripe:setup` to create the `ia-marking` price, then commit the
+   regenerated `src/lib/stripe-prices.generated.ts`. Until that is done the
+   checkout answers "That is not on sale yet" — deliberately, rather than
+   charging against a price that does not exist.
+3. **Descriptors are optional and the service is honest without them.** With
+   none installed, every review gives the full written feedback and no marks,
+   and says so at the top of the review. If your centre is licensed to hold
+   IB's achievement descriptors, install them in **Admin → IA Reviews**; the
+   format is in `README.md` under "IA review".
+4. Give yourself a credit on your own student account (**Admin → Students → a
+   student → IA review credits**) and send a real IA through before selling
+   one.
+
+Nothing about the accuracy of a mark has been measured. Do not put an accuracy
+claim on the marketing site; the pricing page's wording is deliberately about
+what the review contains rather than how close it gets.
+
 ---
 
 ## Afterwards

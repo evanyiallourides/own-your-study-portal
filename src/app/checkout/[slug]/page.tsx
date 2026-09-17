@@ -170,12 +170,20 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
               </label>
             )}
             {sku.grants !== null && (
-              /* Digital content, readable the moment access is granted. In the
+              /* Digital, and handed over the moment access is granted. In the
                  UK and EU the fourteen-day cancellation right survives unless
                  the buyer asks for immediate access AND acknowledges losing it,
                  so the refund policy's "not refundable once you open it" is
                  only true if that is actually captured here. Required, so the
-                 form will not submit without it. */
+                 form will not submit without it.
+
+                 The wording follows what is actually being bought. "Once it is
+                 open" describes a question bank and does not describe a review
+                 of your coursework, and an acknowledgement that misdescribes
+                 the thing it is waiving the right to is not much of one. An IA
+                 review keeps its cancellation right until a review is actually
+                 run — which is also why unused credits come back on a refund
+                 and used ones do not. */
               <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-rule bg-white p-4 text-sm text-ink-700">
                 <input
                   type="checkbox"
@@ -185,8 +193,9 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
                   className="mt-0.5 h-4 w-4 flex-none"
                 />
                 <span>
-                  I want access straight away, and I understand that once it is open this is
-                  no longer refundable.{" "}
+                  {sku.grants.iaMarkings
+                    ? "I want to use this straight away, and I understand that a review I have had back is not refundable. Reviews I have not used still are."
+                    : "I want access straight away, and I understand that once it is open this is no longer refundable."}{" "}
                   <a
                     href="https://ownyourstudy.com/refunds.html"
                     className="underline underline-offset-2"

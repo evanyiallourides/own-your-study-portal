@@ -9,8 +9,10 @@ import {
   createAssignment,
   createSubject,
   inviteUser,
+  linkParentToStudent,
   setAssignmentActive,
   setProfileActive,
+  unlinkParentFromStudent,
   setSubjectArchived,
   updateSettings,
   setQuestionBankAccess,
@@ -18,6 +20,7 @@ import {
 import { ROLE_LABEL } from "@/lib/navigation";
 import type {
   AppSettings,
+  Parent,
   QuestionBankAccess,
   Student,
   Subject,
@@ -448,6 +451,108 @@ export function ToggleAssignmentButton({
     >
       {pending ? "Working…" : active ? "Revoke access" : "Restore access"}
     </button>
+  );
+}
+
+/* -- families ------------------------------------------------------------- */
+
+/**
+ * Who is allowed to watch this student, and the undo for it.
+ *
+ * Most rows here were made by a payment: somebody bought the lessons and said
+ * at checkout that they were the child's parent. That is an assertion by the
+ * person holding the card, not a verified fact, so it has to be visible and it
+ * has to be removable — which is what this is.
+ */
+export function FamilyLinks({
+  studentId,
+  studentName,
+  linked,
+  candidates,
+}: {
+  studentId: string;
+  studentName: string;
+  linked: Parent[];
+  candidates: Parent[];
+}) {
+  const { pending, error, done, run } = useAction();
+  const unlinked = candidates.filter((c) => !linked.some((l) => l.id === c.id));
+  const [parentId, setParentId] = useState("");
+
+  return (
+    <div className="space-y-5">
+      <Feedback error={error} done={done} />
+
+      {linked.length === 0 ? (
+        <p className="text-sm text-ink-500">
+          Nobody has sight of {studentName} but {studentName} and their tutors.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {linked.map((parent) => (
+            <li
+              key={parent.id}
+              className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-[10px] border border-rule bg-paper px-4 py-3"
+            >
+              <div className="min-w-0">
+                <p className="font-medium text-ink">{parent.profile.fullName}</p>
+                <p className="truncate text-sm text-ink-500">{parent.profile.email}</p>
+              </div>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  run(
+                    () => unlinkParentFromStudent({ parentId: parent.id, studentId }),
+                    `${parent.profile.fullName} can no longer see ${studentName}.`,
+                  )
+                }
+                className="text-sm font-medium text-ink-500 transition-colors hover:text-danger"
+              >
+                {pending ? "Working…" : "Remove"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {unlinked.length > 0 ? (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!parentId) return;
+            run(
+              () => linkParentToStudent({ parentId, studentId, relationship: "Added by an administrator" }),
+              "Linked.",
+            );
+            setParentId("");
+          }}
+        >
+          <div className="min-w-[220px] flex-1">
+            <label htmlFor="fl-parent" className="field-label">
+              Add a parent
+            </label>
+            <select
+              id="fl-parent"
+              value={parentId}
+              onChange={(e) => setParentId(e.target.value)}
+              className="field"
+            >
+              <option value="">Choose someone…</option>
+              {unlinked.map((parent) => (
+                <option key={parent.id} value={parent.id}>
+                  {parent.profile.fullName} · {parent.profile.email}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button type="submit" disabled={pending || !parentId}>
+            {pending ? "Working…" : "Link"}
+          </Button>
+        </form>
+      ) : null}
+    </div>
   );
 }
 

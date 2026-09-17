@@ -37,13 +37,14 @@ demo data on every page and cannot reach a database, a model or a meeting.
 8. [Roles and access](#roles-and-access)
 9. [Environment variables](#environment-variables)
 10. [OpenAI integration](#openai-integration)
-11. [Google Meet and Calendar](#google-meet-and-calendar)
-12. [Recall.ai integration](#recallai-integration)
-13. [Privacy, consent and retention](#privacy-consent-and-retention)
-14. [Deployment](#deployment)
-15. [Configuring portal.ownyourstudy.com](#configuring-portalownyourstudycom)
-16. [Testing](#testing)
-17. [What is deliberately not built yet](#what-is-deliberately-not-built-yet)
+11. [IA review](#ia-review)
+12. [Google Meet and Calendar](#google-meet-and-calendar)
+13. [Recall.ai integration](#recallai-integration)
+14. [Privacy, consent and retention](#privacy-consent-and-retention)
+15. [Deployment](#deployment)
+16. [Configuring portal.ownyourstudy.com](#configuring-portalownyourstudycom)
+17. [Testing](#testing)
+18. [What is deliberately not built yet](#what-is-deliberately-not-built-yet)
 
 ---
 
@@ -185,12 +186,18 @@ demo mode switches itself off.
 
 ```
 supabase/migrations/
-├── 20260825090000_initial_schema.sql   tables, enums, triggers
-├── 20260825091000_rls.sql              helpers, policies, the student view
-├── 20260825092000_storage.sql          the private bucket and its policies
-├── 20260825093000_workflow.sql         publish_lesson and friends
-├── 20260826100000_google_calendar.sql  tutor Google connections, event ids
-└── 20260903120000_question_banks.sql   question bank access, pooled hours
+├── 20260825090000_initial_schema.sql        tables, enums, triggers
+├── 20260825091000_rls.sql                   helpers, policies, the student view
+├── 20260825092000_storage.sql               the private bucket and its policies
+├── 20260825093000_workflow.sql              publish_lesson and friends
+├── 20260826100000_google_calendar.sql       tutor Google connections, event ids
+├── 20260903120000_question_banks.sql        question bank access, pooled hours
+├── 20260914120000_payment_notifications.sql what an administrator is told about
+├── 20260914121000_payments.sql              orders, the ledger, claiming a buyer
+├── 20260914130000_transcript_retention.sql  the purge, and what it leaves behind
+├── 20260914131000_transcript_retention_schedule.sql  when the purge runs
+├── 20260915100000_auto_enrol_buyers.sql     a payment invites the student
+└── 20260915140000_parent_accounts.sql       …and the parent who paid for them
 ```
 
 With the Supabase CLI:
@@ -378,11 +385,58 @@ returns nothing).
 | Transcripts | own, published, if enabled for them | own lessons | all | **never** |
 | Files | own, published lessons | own lessons, upload | all | — |
 | Join the meeting | own, in the window | own, in the window | — | **never** |
+| Orders and payments | own | **never** | all | children's |
 | Publish a lesson | — | own lessons | all | — |
 | Create assignments | — | **no** | yes | — |
 
 A tutor cannot assign themselves a student — that would make the whole model
 self-serve. Only an admin creates a `tutor_student_subjects` row.
+
+A tutor sees no orders at all — not a filtered view, none. Teaching a student
+is no reason to know what their family paid, and the absence of a tutor policy
+on `orders` is deliberate rather than an oversight.
+
+### A purchase makes the accounts
+
+Nobody signs themselves up. Accounts come from an administrator's invitation or
+from a payment, and a payment can make two of them.
+
+Checkout asks three optional questions: the student's name, their email, and
+whether the buyer is their parent or guardian. Left alone, they mean "I am the
+student" and one account is invited. Filled in, the student named gets the
+account and the lessons; whether the *buyer* gets one as well is the third
+answer's job.
+
+```
+payment settles
+  ├── resolveStudent()  → always: whoever the lessons are for
+  └── resolveParent()   → only on an explicit yes to the guardian question
+        │
+        ├── student invited  (role: student)
+        └── parent invited   (role: parent)
+              │
+              └── whichever accepts second, handle_new_user() calls
+                  link_parent_for_profile(), which reads the pairing off the
+                  order itself and writes parent_students
+```
+
+The link is deferred because the two people accept independently and in either
+order. `link_parent_for_profile()` therefore runs for every new profile and asks
+the question from whichever side has just arrived — a new parent looks for
+children who already have accounts, a new student looks for a parent who does.
+It is idempotent, so a second purchase for the same pair adds nothing.
+
+**The guardian question is asked rather than inferred.** A payment cannot tell a
+parent from an employer or a friend, and a link is a standing view of somebody's
+lessons, homework and progress. So only an explicit yes creates one: a no
+doesn't, an unanswered field doesn't, and `buyer_is_guardian` is null on every
+order taken before the question existed — which is not a yes either.
+
+Because the answer is an assertion by the person holding the card and not a
+verified fact, every link is listed on the student's admin page and can be
+removed there, and one can be added by hand for the cases a purchase cannot
+cover — a second guardian who never paid for anything, or an order that predates
+the question.
 
 ### The owner runs the practice and teaches in it
 
@@ -495,6 +549,151 @@ or wellbeing. Student-facing text is written in the second person, specific and
 evidence-based, in British English.
 
 **Nothing it produces is ever shown to a student without a tutor publishing it.**
+
+---
+
+## IA review
+
+A student uploads an internal assessment, it is read against the published
+criteria, and they get back a structured review: evidence pointed at specific
+pages, a ranked action list, and a log of which of their calculations were
+actually re-done. One review costs one credit; credits are bought at checkout
+(`ia-marking`, US$45) or granted by an administrator.
+
+Three subjects are supported, because those are the three assessment packs the
+service was specified from: **Biology**, **Chemistry** and **Mathematics:
+Analysis and Approaches**, at SL and HL.
+
+### The one thing to understand before changing any of it
+
+**We do not hold IB's achievement descriptors, and without them the service
+withholds marks.**
+
+That is not a gap waiting to be filled in with a plausible approximation. The
+descriptors are the sentences that decide whether a piece of work is a 3 or a
+4; they are IB's, they are not published, and a mark reconstructed from memory
+or from a revision website looks exactly as authoritative as a real one to a
+sixteen-year-old planning their revision around it.
+
+So the default state of this subsystem — the state every deployment is in until
+somebody installs licensed material — is: **full written review, every mark
+null, and a banner at the top of the review saying why.** The feedback is the
+product. The marks are an addition that becomes available when, and only when,
+an operator supplies the descriptors they are licensed to hold.
+
+`src/lib/ia/mode.ts` is the single place that decides whether marks are allowed,
+it runs *before* the model is called, and `test/ia-marking.test.mts` covers
+every path through it. If you are tempted to make marking the default, that file
+and its tests are the argument against.
+
+### How the pieces fit
+
+```
+src/lib/ia/rubrics.ts     criterion structure and session -> course routing
+src/lib/ia/packs.ts       what a descriptor pack is, and refusing incomplete ones
+src/lib/ia/pack-store.ts  reading and installing packs from Supabase
+src/lib/ia/mode.ts        may this submission be marked? (pure, heavily tested)
+src/lib/ia/prompt.ts      the system prompt and the per-subject diagnostics
+src/lib/ia/schema.ts      the model's output contract, and composing the record
+src/lib/ia/extract.ts     PDF / .docx / text, dependency-free
+src/lib/ia/mark.ts        the model call, the second blind pass, adjudication
+src/lib/ia/storage.ts     the private bucket the upload goes into
+```
+
+**Routing is by examination session, never by upload date.** A student uploading
+in 2027 for a May 2029 Maths sitting is marked against the 2029 course — which
+this service refuses to mark, because its descriptors are a separate pack we do
+not have. Sciences before the May 2025 session are refused for the same reason.
+All three source packs name this as the mistake they most expect.
+
+**The report is evidence; only the pack is authority.** Text inside a student's
+document never instructs the model. That boundary is enforced by where the bytes
+come from rather than by asking a model to be careful: descriptors are read with
+the service role from an admin-only table, and the document arrives fenced
+inside the user message.
+
+### Installing descriptors
+
+Administrators only, at `/admin/ia-reviews`. Paste JSON for one marking model:
+
+```json
+{
+  "rubricId": "biology_fa2025",
+  "version": "Biology guide, first assessment 2025",
+  "source": "Official subject guide, pp. 00-00",
+  "shared": {
+    "research_design": {
+      "criterionId": "research_design",
+      "bands": [
+        { "marks": "0",   "text": "..." },
+        { "marks": "1-2", "text": "..." },
+        { "marks": "3-4", "text": "..." },
+        { "marks": "5-6", "text": "..." }
+      ],
+      "clarifications": ["..."]
+    },
+    "data_analysis": { "criterionId": "data_analysis", "bands": [] },
+    "conclusion":    { "criterionId": "conclusion",    "bands": [] },
+    "evaluation":    { "criterionId": "evaluation",    "bands": [] }
+  },
+  "bestFitGuidance": ["..."]
+}
+```
+
+Maths AA additionally needs `byLevel.SL` and `byLevel.HL` entries for
+`use_of_mathematics`, which is the only criterion across the three subjects
+marked differently at the two levels.
+
+A pack that does not cover every criterion of its model **is refused**, with the
+gaps named. There is no partial mode: a pack covering four criteria out of five
+would otherwise mark four and improvise the fifth, which looks exactly like a
+working system.
+
+Packs are content-addressed. Every review records the version *and* the
+checksum it was produced under, so replacing a pack never silently restates old
+reviews, and a mark can be traced back to the exact text behind it a year later.
+Removing a pack stops new marks; it does not retract marks already given.
+
+### Credits and money
+
+`ia_credit_entries` is a ledger, not a balance column — the balance is
+`sum(delta)`. That is what makes the money rules expressible: a webhook
+delivered twice cannot double a balance (unique index on the purchase entry),
+two tabs cannot spend one credit twice (`spend_ia_credit()` locks and checks in
+one statement), and a refund reclaims unused credits without clawing back a
+review the student has already read.
+
+**The credit is spent after the review is stored, never before.** A model call
+that fails, a PDF that turns out to be a photograph of a desk, a session we
+cannot mark — none of them costs a student anything. The failure this leaves is
+a review that exists and was not charged for, which is the right way round.
+
+### Escalating to a person
+
+Every review ends with an offer to have a tutor read it, which records the
+request and notifies administrators. It deliberately does **not** take a
+payment: what it leads to is a conversation about the IA & EE Strategy Package
+(`ia-strategy`), and nobody should be charged US$468 by clicking a button at the
+end of a report that has just told them their evaluation is thin. Where the
+review itself flagged something for a human, that is shown as the reason —
+which is both more honest and a better offer.
+
+### Seeing it without an API key
+
+Demo mode ships one worked review (`src/lib/demo/ia.ts`) — feedback-only, since
+that is what a deployment with no descriptors actually produces. Sign in as
+Sophia and open **IA Review**. No review will run in demo mode; the upload form
+refuses rather than pretending.
+
+### What has not been done
+
+**Nothing here has been calibrated.** No marked student work has been scored
+against it, no benchmark has been run, and `calibration_status` is
+`'uncalibrated'` on every review — enforced by a check constraint, so changing
+it is a deliberate act. The three source packs each set out a calibration plan;
+none of it has been carried out. Until it has, the honest claim is that this
+produces useful, evidence-linked feedback, and no claim at all can be made about
+the accuracy of a mark.
 
 ---
 
@@ -894,9 +1093,10 @@ to be one.
 - **Ask Own Your Study AI** — "what did my tutor explain about SN1 last week?".
   The transcripts are stored as addressable segments (`#t-<index>` deep links
   already work), which is the retrieval substrate this needs.
-- **The parent dashboard** is intentionally thin: lessons attended, what was
-  covered, homework, what is next. No transcript, no tutor notes. Widening it
-  should be a deliberate decision, not a default.
+- **The parent dashboard** is deliberately narrow: lessons attended, what was
+  covered, homework, what is next, and what has been paid. No transcript, no
+  tutor notes — those are between a student and their tutor, and widening that
+  should be a deliberate decision rather than a default.
 - **Live whiteboard.** `FileList` renders boards as images and PDFs today. A
   tldraw canvas would slot in as another file category rendered by the same
   component.
@@ -904,6 +1104,21 @@ to be one.
   taking the money is not. An administrator ticks the box when a subscription is
   paid. A Stripe webhook writing `question_bank_access` is the whole of what
   self-serve would add.
+- **Calibrating the IA review.** The service works; nothing about the accuracy
+  of its marks has been measured. Before any accuracy claim is made anywhere
+  near a customer, the three source packs each set out the same plan: collect
+  10–20 marked IAs per subject across the achievement range, hold out a
+  separate unseen benchmark, keep every draft of one investigation inside one
+  split, hide the reference marks during scoring, and measure per-criterion
+  signed and absolute error rather than only a total. A model can give useful
+  feedback while being unreliable at precise marks, and both need measuring
+  separately. Until that is done, `calibration_status` stays `'uncalibrated'`
+  and the review says so on its face.
+- **Maths AI, and the 2029 Maths course.** Maths AI's exploration is assessed
+  with the same five criteria as AA, but no pack has been supplied for it and a
+  rubric inferred from a neighbouring subject is exactly the sort of invention
+  the rest of this subsystem refuses. The 2029 AA course is already routed to
+  and already blocked; it needs its own descriptors before it can be marked.
 - **Recurring lessons.** Google Calendar events are created one at a time; the
   API's `recurrence` field is where a weekly slot would go.
 - **Two-way calendar sync.** The portal writes to Google; it does not watch for
@@ -919,4 +1134,12 @@ to be one.
   before the first retention period elapses.
 - **Notification delivery.** Notifications are database records rendered in the
   header. No email, no push, no realtime.
-- **Billing, attendance, tutor analytics, student goals.**
+- **Attendance, tutor analytics, student goals.** Billing now has a parent-facing
+  view at `/parent/billing` — orders, the payment ledger, an instalment plan's
+  progress and what the hours have earned — but it is a record, not a place to
+  pay. Re-running a failed charge still means writing to a person.
+- **Verifying that a buyer is who they say they are.** The guardian question at
+  checkout is taken at its word. That is defensible because the answer only ever
+  grants what a parent already gets, an administrator can see and remove every
+  link, and the alternative — an identity check at a payment page — would cost
+  more families than it protects. It is a deliberate position, not an oversight.

@@ -6,7 +6,7 @@ import { Badge, Card, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
 import { repositoryFor } from "@/lib/data";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatMoneyMinor } from "@/lib/format";
 import type { StatusTone } from "@/lib/status";
 import {
   isInstalmentPlanRunning,
@@ -57,14 +57,6 @@ const STATUS_LABEL: Record<OrderStatus, string> = {
   cancelled: "Cancelled",
 };
 
-function money(minor: number, currency: string): string {
-  return new Intl.NumberFormat("en", {
-    style: "currency",
-    currency: currency.toUpperCase(),
-    maximumFractionDigits: 0,
-  }).format(minor / 100);
-}
-
 function OrderLine({ order }: { order: Order }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -77,7 +69,7 @@ function OrderLine({ order }: { order: Order }) {
       </div>
       <div className="text-right">
         <p className="font-semibold tabular-nums text-ink">
-          {money(order.amountTotalMinor, order.currency)}
+          {formatMoneyMinor(order.amountTotalMinor, order.currency)}
         </p>
         <p className="text-xs text-ink-500">{formatDate(order.createdAt)}</p>
       </div>
@@ -121,7 +113,7 @@ export default async function AdminOrders() {
                 Collected · {currency.toUpperCase()}
               </p>
               <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">
-                {money(minor, currency)}
+                {formatMoneyMinor(minor, currency)}
               </p>
             </Card>
           ))}
@@ -217,8 +209,8 @@ export default async function AdminOrders() {
                   </span>
                 </div>
                 <p className="text-sm text-ink-500">
-                  {money(order.amountPaidMinor, order.currency)} of{" "}
-                  {money(order.amountTotalMinor, order.currency)} collected
+                  {formatMoneyMinor(order.amountPaidMinor, order.currency)} of{" "}
+                  {formatMoneyMinor(order.amountTotalMinor, order.currency)} collected
                 </p>
               </Card>
             ))}
@@ -251,7 +243,7 @@ export default async function AdminOrders() {
                     <span>Not attached to a student</span>
                   )}
                   {order.taxAmountMinor > 0 && (
-                    <span>incl. {money(order.taxAmountMinor, order.currency)} tax</span>
+                    <span>incl. {formatMoneyMinor(order.taxAmountMinor, order.currency)} tax</span>
                   )}
                   {order.note && <span className="italic">{order.note}</span>}
                   {order.studentId && <UnlinkOrderButton orderId={order.id} />}

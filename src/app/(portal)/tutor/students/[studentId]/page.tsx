@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { HomeworkList } from "@/components/portal/homework-list";
+import { IaStudentPanel } from "@/components/portal/ia-student-panel";
 import { LessonCard, NextLessonCard } from "@/components/portal/lesson-cards";
 import { ChevronLeftIcon } from "@/components/ui/icons";
 import { Avatar, Badge, Card, NoteList, Rule, SectionHead } from "@/components/ui/primitives";
@@ -36,12 +37,15 @@ export default async function TutorStudentPage({
   if (!student) notFound();
 
   const now = new Date().toISOString();
-  const [subjects, past, upcoming, homework, progress] = await Promise.all([
+  const [subjects, past, upcoming, homework, progress, iaSubmissions] = await Promise.all([
     repo.listStudentSubjects(studentId),
     repo.listLessons({ tutorId, studentId, to: now, order: "desc" }),
     repo.listLessons({ tutorId, studentId, status: "scheduled", from: now, order: "asc" }),
     repo.listHomework({ studentId, completed: false }),
     repo.listProgress(studentId).catch(() => []),
+    /* Swallowed rather than fatal: a portal whose IA migration has not been
+       applied yet should still show a tutor their student's lessons. */
+    repo.listIaSubmissions({ studentId }).catch(() => []),
   ]);
 
   const publishedRecent = past.filter((l) => l.published).slice(0, 8);
@@ -163,6 +167,16 @@ export default async function TutorStudentPage({
             ) : null}
           </Card>
         </section>
+      ) : null}
+
+      {iaSubmissions.length > 0 ? (
+        <IaStudentPanel
+          entries={iaSubmissions}
+          hrefBase={`/tutor/students/${studentId}/ia`}
+          /* Null: what the student has left to spend is billing, and billing
+             is not a tutor's business. */
+          creditBalance={null}
+        />
       ) : null}
 
       <section>

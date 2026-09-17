@@ -8,7 +8,13 @@ import {
   notifyAdmins,
   revokeOrderEntitlement,
 } from "@/lib/payments/entitlements";
-import { enrolPaidBuyer, resolveStudent } from "@/lib/payments/enrolment";
+import {
+  enrolPaidBuyer,
+  enrolPaidParent,
+  readGuardianAnswer,
+  resolveParent,
+  resolveStudent,
+} from "@/lib/payments/enrolment";
 import { capInstalmentPlan } from "@/lib/payments/instalments";
 import { writeOrderColumns } from "@/lib/payments/order-writes";
 import { stripeClient, stripeConfigured } from "@/lib/payments/stripe";
@@ -268,7 +274,7 @@ export async function POST(request: NextRequest) {
     const { data: row } = await db
       .from("orders")
       .select(
-        "id, plan, status, instalment_months, instalments_paid, amount_total_minor, amount_paid_minor, grants_question_bank_days, buyer_email, sku_name",
+        "id, plan, status, instalment_months, instalments_paid, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, sku_name",
       )
       .eq("id", orderId)
       .maybeSingle();
@@ -287,6 +293,10 @@ export async function POST(request: NextRequest) {
       amountTotalMinor: row.amount_total_minor,
       amountPaidMinor: row.amount_paid_minor,
       grantsQuestionBankDays: row.grants_question_bank_days,
+      /* Nullish rather than a plain read: the column arrives as undefined on a
+         database that has not run the IA migration yet, and undefined would
+         make grantsSomething() true for every order ever placed. */
+      grantsIaMarkings: row.grants_ia_markings ?? null,
     };
 
     const plan = planFor(signal, order);
@@ -309,6 +319,11 @@ export async function POST(request: NextRequest) {
       /* Checkout asked who the student is. Both fields are optional, so this
          is usually empty and the buyer is the student. */
       for (const field of session.custom_fields ?? []) {
+        // The guardian question is a dropdown, so its answer is not in .text.
+        if (field.key === "is_guardian") {
+          updates.is_guardian_given = field.dropdown?.value ?? null;
+          continue;
+        }
         const value = field.text?.value?.trim();
         if (!value) continue;
         if (field.key === "student_name") updates.student_name_given = value;
@@ -386,9 +401,23 @@ export async function POST(request: NextRequest) {
         })
       : null;
 
+    /* The buyer, when they said they were the student's parent. Null whenever
+       they bought for themselves, said no, or were never asked. */
+    const parent = settles
+      ? resolveParent({
+          buyerEmail: (updates.buyer_email as string | undefined) ?? row.buyer_email ?? "",
+          buyerName: (updates.buyer_name as string | undefined) ?? null,
+          isGuardian: readGuardianAnswer(updates.is_guardian_given as string | undefined),
+          student,
+        })
+      : null;
+
     if (student?.boughtForSomeoneElse) {
       updates.student_email = student.email;
-      updates.note = `Bought by ${(updates.buyer_email as string) ?? row.buyer_email} for ${student.email}`;
+      updates.buyer_is_guardian = parent !== null;
+      updates.note = parent
+        ? `Bought by ${parent.email} for ${student.email}, who they are the parent of`
+        : `Bought by ${(updates.buyer_email as string) ?? row.buyer_email} for ${student.email}`;
     }
 
     if (plan.status) updates.status = plan.status;
@@ -396,9 +425,14 @@ export async function POST(request: NextRequest) {
     if (plan.countsInstalment) updates.instalments_paid = order.instalmentsPaid + 1;
     if (typeof plan.taxMinor === "number") updates.tax_amount_minor = plan.taxMinor;
 
-    // The two student_*_given values are how the custom fields travel between
-    // the blocks above; they are not columns and must not reach the update.
-    const { student_name_given: _n, student_email_given: _e, ...columns } = updates;
+    // The *_given values are how the custom fields travel between the blocks
+    // above; they are not columns and must not reach the update.
+    const {
+      student_name_given: _n,
+      student_email_given: _e,
+      is_guardian_given: _g,
+      ...columns
+    } = updates;
 
     if (Object.keys(columns).length > 0) {
       const written = await writeOrderColumns(db, orderId, columns);
@@ -466,6 +500,35 @@ export async function POST(request: NextRequest) {
                   : result.reason),
           );
         }
+      }
+    }
+
+    /* The other half of the family.
+
+       Unconditional rather than nested inside the student's branch above: the
+       student may already have had an account, in which case nothing there
+       ran, and the parent still has none. The link between the two is the
+       database's job — link_parent_for_profile() makes it when whichever of
+       them is second accepts — so all that is needed here is the invitation.
+
+       A failure is reported and nothing else. The purchase is already
+       recorded, the student already has what they paid for, and an
+       administrator can add the parent by hand on the student's page. */
+    if (parent) {
+      const invited = await enrolPaidParent(db, parent);
+
+      if (invited.status === "failed" || invited.status === "off") {
+        await notifyAdmins(
+          db,
+          "order_unmatched",
+          "A parent account was not created",
+          `${parent.email} bought ${row.sku_name} for ${parent.studentEmail} and said they ` +
+            `are their parent, but no parent account was invited. ` +
+            (invited.status === "off"
+              ? "Automatic enrolment is switched off in settings."
+              : `The invitation could not be sent: ${invited.reason}`) +
+            ` They can be linked by hand on the student's page.`,
+        );
       }
     }
 

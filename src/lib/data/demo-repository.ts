@@ -15,13 +15,20 @@ import {
   type LessonFilter,
   type LessonMeetingInput,
   type LessonNotesPatch,
+  type CreateIaSubmissionInput,
   type Repository,
   type SubjectInput,
   type UpdateLessonInput,
   type UploadFileInput,
 } from "@/lib/data/repository";
 import type {
+  Parent,
   Order,
+  IaCreditEntry,
+  IaCreditLedger,
+  IaReviewRecord,
+  IaSubmission,
+  IaSubmissionWithReviews,
   OrderPayment,
   OrderStatus,
   AppSettings,
@@ -278,6 +285,161 @@ export class DemoRepository implements Repository {
     order.claimedAt = null;
   }
 
+  /* ==========================================================================
+     IA review
+     --------------------------------------------------------------------------
+     The same access rules as the migration, restated — a student sees their
+     own, a tutor sees the students they teach, an administrator sees all, and
+     a parent sees the ledger but not the feedback. The last of those is the
+     one worth restating in TypeScript rather than trusting to a policy file:
+     "your mother can see that you had an IA reviewed, and cannot read what it
+     said" is a promise made to a sixteen-year-old, and demo mode should keep
+     it too.
+     ========================================================================== */
+
+  async getIaCredits(studentId: string): Promise<IaCreditLedger> {
+    // Parents may read the ledger — they paid for it — so this is a wider test
+    // than canSeeStudent, which governs the coursework itself.
+    if (!this.canSeeStudent(studentId) && !this.isParentOf(studentId)) {
+      return { balance: 0, entries: [] };
+    }
+    const entries = [...(demoState.iaCredits[studentId] ?? [])].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
+    return {
+      balance: entries.reduce((total, e) => total + e.delta, 0),
+      entries,
+    };
+  }
+
+  async grantIaCredits(studentId: string, count: number, note: string): Promise<void> {
+    if (this.session.profile.role !== "admin") throw new AccessDeniedError();
+    if (count === 0) return;
+    const entry: IaCreditEntry = {
+      id: demoId("iacredit"),
+      delta: count,
+      reason: count > 0 ? "admin_grant" : "correction",
+      note,
+      createdAt: new Date().toISOString(),
+    };
+    demoState.iaCredits[studentId] = [...(demoState.iaCredits[studentId] ?? []), entry];
+  }
+
+  async spendIaCredit(studentId: string, note: string): Promise<number> {
+    const ledger = await this.getIaCredits(studentId);
+    if (ledger.balance < 1) {
+      throw new Error(`No IA review credit available for student ${studentId}`);
+    }
+    demoState.iaCredits[studentId] = [
+      ...(demoState.iaCredits[studentId] ?? []),
+      {
+        id: demoId("iacredit"),
+        delta: -1,
+        reason: "review",
+        note,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    return ledger.balance - 1;
+  }
+
+  async listIaSubmissions(
+    filter: { studentId?: string; escalatedOnly?: boolean } = {},
+  ): Promise<IaSubmissionWithReviews[]> {
+    return demoState.iaSubmissions
+      .filter((s) => this.canSeeStudent(s.studentId))
+      .filter((s) => !filter.studentId || s.studentId === filter.studentId)
+      .filter((s) => !filter.escalatedOnly || s.professionalReviewRequestedAt !== null)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((submission) => this.withReviews(submission));
+  }
+
+  async getIaSubmission(submissionId: string): Promise<IaSubmissionWithReviews | null> {
+    const submission = demoState.iaSubmissions.find((s) => s.id === submissionId);
+    if (!submission) return null;
+    if (!this.canSeeStudent(submission.studentId)) throw new AccessDeniedError();
+    return this.withReviews(submission);
+  }
+
+  async createIaSubmission(input: CreateIaSubmissionInput): Promise<IaSubmission> {
+    const now = new Date().toISOString();
+    const submission: IaSubmission = {
+      id: demoId("iasub"),
+      studentId: input.studentId,
+      subject: input.subject,
+      level: input.level,
+      session: input.session,
+      stage: input.stage,
+      fileName: input.fileName,
+      fileSize: input.fileSize,
+      fileHash: input.fileHash,
+      wordCount: input.wordCount,
+      studentNote: input.studentNote,
+      status: "uploaded",
+      failureNote: null,
+      professionalReviewRequestedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    demoState.iaSubmissions.push(submission);
+    return submission;
+  }
+
+  async setIaSubmissionStatus(
+    submissionId: string,
+    status: IaSubmission["status"],
+    failureNote: string | null = null,
+  ): Promise<void> {
+    const submission = demoState.iaSubmissions.find((s) => s.id === submissionId);
+    if (!submission) throw new NotFoundError("No such submission.");
+    submission.status = status;
+    submission.failureNote = failureNote;
+    submission.updatedAt = new Date().toISOString();
+  }
+
+  async saveIaReview(submissionId: string, review: unknown): Promise<string> {
+    const body = review as IaReviewRecord["body"];
+    const record: IaReviewRecord = {
+      id: demoId("iarev"),
+      submissionId,
+      rubricId: body.rubricId,
+      packVersion: body.assessmentPackVersion,
+      mode: body.mode,
+      calibrationStatus: "uncalibrated",
+      total: body.total,
+      maxTotal: body.maxTotal,
+      body,
+      createdAt: new Date().toISOString(),
+    };
+    demoState.iaReviews.push(record);
+    return record.id;
+  }
+
+  async requestProfessionalReview(submissionId: string): Promise<void> {
+    const submission = demoState.iaSubmissions.find((s) => s.id === submissionId);
+    if (!submission) throw new NotFoundError("No such submission.");
+    if (!this.canSeeStudent(submission.studentId)) throw new AccessDeniedError();
+    submission.professionalReviewRequestedAt = new Date().toISOString();
+  }
+
+  private withReviews(submission: IaSubmission): IaSubmissionWithReviews {
+    return {
+      submission,
+      reviews: demoState.iaReviews
+        .filter((r) => r.submissionId === submission.id)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    };
+  }
+
+  private isParentOf(studentId: string): boolean {
+    return (
+      this.session.parentId !== null &&
+      demoState.parentStudents.some(
+        (link) => link.parentId === this.session.parentId && link.studentId === studentId,
+      )
+    );
+  }
+
   async getQuestionBankAccess(studentId: string): Promise<QuestionBankAccess> {
     if (!this.canSeeStudent(studentId)) {
       return {
@@ -439,6 +601,56 @@ export class DemoRepository implements Repository {
     this.requireAdmin();
     if (demoState.studentSubjects.some((ss) => ss.studentId === studentId && ss.subjectId === subjectId)) return;
     demoState.studentSubjects.push({ id: demoId("ss"), studentId, subjectId, active: true });
+  }
+
+  /* -- families ---------------------------------------------------------- */
+
+  async listParents(search?: string): Promise<Parent[]> {
+    // Only an administrator browses parents as a list. A parent reaching this
+    // would be reading the other families on the roll.
+    if (!this.isAdmin) return [];
+    const needle = search?.trim().toLowerCase();
+    if (!needle) return demoState.parents;
+    return demoState.parents.filter(
+      (p) =>
+        p.profile.fullName.toLowerCase().includes(needle) ||
+        p.profile.email.toLowerCase().includes(needle),
+    );
+  }
+
+  async listParentsForStudent(studentId: string): Promise<Parent[]> {
+    // Whoever may see the student may see who is entitled to watch them —
+    // including the student themselves, who should be able to find out.
+    if (!this.canSeeStudent(studentId)) return [];
+    const ids = demoState.parentStudents
+      .filter((l) => l.studentId === studentId)
+      .map((l) => l.parentId);
+    return demoState.parents.filter((p) => ids.includes(p.id));
+  }
+
+  async linkParentToStudent(
+    parentId: string,
+    studentId: string,
+    relationship: string | null,
+  ): Promise<void> {
+    this.requireAdmin();
+    if (!demoState.parents.some((p) => p.id === parentId)) throw new NotFoundError();
+    if (!demoState.students.some((s) => s.id === studentId)) throw new NotFoundError();
+    const existing = demoState.parentStudents.find(
+      (l) => l.parentId === parentId && l.studentId === studentId,
+    );
+    if (existing) {
+      existing.relationship = relationship;
+      return;
+    }
+    demoState.parentStudents.push({ parentId, studentId, relationship });
+  }
+
+  async unlinkParentFromStudent(parentId: string, studentId: string): Promise<void> {
+    this.requireAdmin();
+    demoState.parentStudents = demoState.parentStudents.filter(
+      (l) => !(l.parentId === parentId && l.studentId === studentId),
+    );
   }
 
   /* -- lessons ----------------------------------------------------------- */

@@ -128,6 +128,35 @@ describe("who may read an order", () => {
     for (const o of rows) assert.equal(o.studentId, "s-sophia");
   });
 
+  /* The parent billing screen reads per-student rather than through
+     listOrders, and then reads each order's ledger. Both are separate methods
+     with their own access check, so both are exercised here rather than
+     assumed from the list above. */
+  it("shows a parent their own child's, read by student id", async () => {
+    const repo = new DemoRepository(sessionFor("p-helen"));
+    const rows = await repo.listOrdersForStudent("s-sophia");
+    assert.ok(rows.length > 0, "Helen's child should have bought something");
+    for (const o of rows) assert.equal(o.studentId, "s-sophia");
+  });
+
+  it("shows a parent nothing for a child who is not theirs", async () => {
+    const repo = new DemoRepository(sessionFor("p-helen"));
+    assert.deepEqual(await repo.listOrdersForStudent("s-marcus"), []);
+  });
+
+  it("lets a parent read the ledger behind their own child's order", async () => {
+    const repo = new DemoRepository(sessionFor("p-helen"));
+    const payments = await repo.getOrderPayments("o-committed-sophia");
+    assert.ok(payments.length > 0, "a paid order should have something in its ledger");
+  });
+
+  it("does not let a parent read the ledger behind another family's order", async () => {
+    // An empty ledger rather than a throw: a withheld read is filtered, not
+    // announced. The order itself is Marcus's, and Helen is not his parent.
+    const repo = new DemoRepository(sessionFor("p-helen"));
+    assert.deepEqual(await repo.getOrderPayments("o-elite-marcus"), []);
+  });
+
   it("hides unattached payments from everyone but an administrator", async () => {
     // An unmatched order carries a stranger's email address. In SQL this falls
     // out of `student_id is null` never matching a student policy; here it has

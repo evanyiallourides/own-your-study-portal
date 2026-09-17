@@ -415,3 +415,418 @@ describe("a parent buying for a child", () => {
     assert.equal(Number(n), 0, "a parent must not collect their child's entitlement");
   });
 });
+
+/* ==========================================================================
+   link_parent_for_profile
+   --------------------------------------------------------------------------
+   A purchase creates two accounts and they are accepted independently — the
+   parent may click their invitation days before the child, or days after. So
+   the link cannot be made at the moment of payment; it has to be made by
+   whichever of the two arrives second, which means the same function has to
+   work from either side.
+
+   The other half of what is tested here is the refusals. A link grants a
+   standing view of a child's lessons, homework and progress, so an order that
+   did not clearly assert a parental relationship must never produce one.
+   ========================================================================== */
+
+describe("link_parent_for_profile", () => {
+  /* Accepting an invitation, as Supabase performs it: a row in auth.users
+     carrying the role the invitation was addressed with. Everything else —
+     the profile, the parents or students row, the claim and the link — is
+     handle_new_user() doing its job, which is the path worth testing. */
+  async function accept(id: string, email: string, role: "parent" | "student"): Promise<void> {
+    await db.exec(`
+      insert into auth.users (id, email, raw_user_meta_data)
+      values ('${id}', '${email}', '{"role":"${role}"}'::jsonb)
+      on conflict do nothing;
+    `);
+  }
+
+  async function makeParent(id: string, email: string): Promise<string> {
+    await accept(id, email, "parent");
+    return (await one<{ id: string }>(
+      `select id from public.parents where profile_id = '${id}'`,
+    )).id;
+  }
+
+  async function makeStudent(id: string, email: string): Promise<string> {
+    await accept(id, email, "student");
+    return (await one<{ id: string }>(
+      `select id from public.students where profile_id = '${id}'`,
+    )).id;
+  }
+
+  async function guardianOrder(
+    buyerEmail: string,
+    studentEmail: string,
+    isGuardian: boolean | null,
+  ): Promise<void> {
+    await db.exec(`insert into public.orders
+      (provider, sku_slug, sku_name, plan, currency, amount_total_minor,
+       buyer_email, student_email, buyer_is_guardian, status)
+      values ('stripe', 'committed-20hr', 'Committed Pack', 'full', 'usd', 114000,
+              '${buyerEmail}', '${studentEmail}',
+              ${isGuardian === null ? "null" : isGuardian}, 'paid')`);
+  }
+
+  async function link(profileId: string): Promise<number> {
+    const { n } = await one<{ n: number }>(
+      `select public.link_parent_for_profile('${profileId}') as n`,
+    );
+    return Number(n);
+  }
+
+  async function linkCount(parentId: string, studentId2: string): Promise<number> {
+    const { n } = await one<{ n: number }>(
+      `select count(*)::int as n from public.parent_students
+        where parent_id = '${parentId}' and student_id = '${studentId2}'`,
+    );
+    return Number(n);
+  }
+
+  const P1 = "aaaaaaa1-0000-0000-0000-000000000001";
+  const S1 = "aaaaaaa1-0000-0000-0000-000000000002";
+  const P2 = "aaaaaaa2-0000-0000-0000-000000000001";
+  const S2 = "aaaaaaa2-0000-0000-0000-000000000002";
+
+  it("links when the parent accepts after the child", async () => {
+    const studentRow = await makeStudent(S1, "child1@example.com");
+    await guardianOrder("parent1@example.com", "child1@example.com", true);
+
+    // No explicit call: accepting the invitation is what runs it.
+    const parentRow = await makeParent(P1, "parent1@example.com");
+    assert.equal(await linkCount(parentRow, studentRow), 1);
+  });
+
+  it("links when the child accepts after the parent", async () => {
+    // The reverse order, which is the one a hand-written trigger usually
+    // forgets: at the moment the parent accepted there was no child to link to,
+    // so the work has to happen again from the other side.
+    const parentRow = await makeParent(P2, "parent2@example.com");
+    await guardianOrder("parent2@example.com", "child2@example.com", true);
+
+    const studentRow = await makeStudent(S2, "child2@example.com");
+    assert.equal(await linkCount(parentRow, studentRow), 1);
+  });
+
+  it("is safe to run again, so a redelivered webhook cannot double-link", async () => {
+    const parentRow = (await one<{ id: string }>(
+      `select id from public.parents where profile_id = '${P1}'`,
+    )).id;
+    const studentRow = (await one<{ id: string }>(
+      `select id from public.students where profile_id = '${S1}'`,
+    )).id;
+
+    assert.equal(await link(P1), 0, "nothing new to link");
+    assert.equal(await link(S1), 0, "nor from the other side");
+    assert.equal(await linkCount(parentRow, studentRow), 1, "still exactly one row");
+  });
+
+  it("matches the addresses regardless of case", async () => {
+    const studentRow = await makeStudent(
+      "aaaaaaa3-0000-0000-0000-000000000002",
+      "child3@example.com",
+    );
+    await guardianOrder("PARENT3@Example.com", "Child3@EXAMPLE.com", true);
+    const parentRow = await makeParent(
+      "aaaaaaa3-0000-0000-0000-000000000001",
+      "parent3@example.com",
+    );
+    assert.equal(await linkCount(parentRow, studentRow), 1);
+  });
+
+  it("links a parent to each of the children they bought for", async () => {
+    const first = await makeStudent("aaaaaaa4-0000-0000-0000-000000000002", "child4a@example.com");
+    const second = await makeStudent("aaaaaaa4-0000-0000-0000-000000000003", "child4b@example.com");
+    await guardianOrder("parent4@example.com", "child4a@example.com", true);
+    await guardianOrder("parent4@example.com", "child4b@example.com", true);
+
+    const parentRow = await makeParent(
+      "aaaaaaa4-0000-0000-0000-000000000001",
+      "parent4@example.com",
+    );
+    assert.equal(await linkCount(parentRow, first), 1);
+    assert.equal(await linkCount(parentRow, second), 1);
+  });
+
+  it("links nobody when the buyer said they were not the parent", async () => {
+    // Somebody paying for an adult friend's tuition. They bought the lessons;
+    // they did not buy a view of how the lessons are going.
+    const parentRow = await makeParent(
+      "aaaaaaa5-0000-0000-0000-000000000001",
+      "payer5@example.com",
+    );
+    const studentRow = await makeStudent(
+      "aaaaaaa5-0000-0000-0000-000000000002",
+      "friend5@example.com",
+    );
+    await guardianOrder("payer5@example.com", "friend5@example.com", false);
+
+    assert.equal(await link("aaaaaaa5-0000-0000-0000-000000000001"), 0);
+    assert.equal(await linkCount(parentRow, studentRow), 0);
+  });
+
+  it("links nobody for an order taken before the question existed", async () => {
+    // buyer_is_guardian is null on every order that predates this migration.
+    // Null is not a yes, and back-filling it as one would grant access to
+    // families who were never asked.
+    const parentRow = await makeParent(
+      "aaaaaaa6-0000-0000-0000-000000000001",
+      "payer6@example.com",
+    );
+    const studentRow = await makeStudent(
+      "aaaaaaa6-0000-0000-0000-000000000002",
+      "child6@example.com",
+    );
+    await guardianOrder("payer6@example.com", "child6@example.com", null);
+
+    assert.equal(await link("aaaaaaa6-0000-0000-0000-000000000001"), 0);
+    assert.equal(await linkCount(parentRow, studentRow), 0);
+  });
+
+  it("never links somebody to themselves", async () => {
+    // A buyer who ticked the box and then typed their own address. Without the
+    // guard this writes a real access grant from a person to themselves.
+    await makeParent("aaaaaaa7-0000-0000-0000-000000000001", "self7@example.com");
+    await guardianOrder("self7@example.com", "self7@example.com", true);
+    assert.equal(await link("aaaaaaa7-0000-0000-0000-000000000001"), 0);
+  });
+
+  it("does nothing for a tutor, whoever paid for what", async () => {
+    await db.exec(`
+      insert into auth.users (id, email)
+        values ('aaaaaaa8-0000-0000-0000-000000000001', 'tutor8@example.com') on conflict do nothing;
+      insert into public.profiles (id, email, first_name, last_name, role)
+        values ('aaaaaaa8-0000-0000-0000-000000000001', 'tutor8@example.com', 'A', 'Tutor', 'tutor')
+        on conflict (id) do nothing;
+    `);
+    await guardianOrder("tutor8@example.com", "child1@example.com", true);
+    assert.equal(await link("aaaaaaa8-0000-0000-0000-000000000001"), 0);
+  });
+});
+
+/* ==========================================================================
+   IA review credits
+   --------------------------------------------------------------------------
+   A ledger rather than a balance column, and the rules that makes possible are
+   all money rules: a webhook delivered twice must not double somebody's
+   credits, two browser tabs must not spend one credit twice, and a refund must
+   take back what was not used without clawing back a review already read.
+
+   Its own student, so nothing here depends on what the blocks above left
+   behind — these run sequentially against one database, and a test that only
+   passes in position is worse than no test.
+   ========================================================================== */
+describe("IA review credits", () => {
+  const PERSON = "44444444-4444-4444-4444-444444444444";
+  let iaStudentId: string;
+
+  before(async () => {
+    await db.exec(`
+      insert into auth.users (id, email) values ('${PERSON}', 'ia@example.com')
+        on conflict (id) do nothing;
+      insert into public.profiles (id, email, first_name, last_name, role)
+        values ('${PERSON}', 'ia@example.com', 'Ira', 'Assess', 'student')
+        on conflict (id) do nothing;
+      insert into public.students (profile_id) values ('${PERSON}') on conflict do nothing;
+    `);
+    iaStudentId = (await one<{ id: string }>(
+      `select id from public.students where profile_id = '${PERSON}'`,
+    )).id;
+  });
+
+  const balance = async (): Promise<number> =>
+    Number(
+      (await one<{ n: number }>(`select public.ia_credit_balance('${iaStudentId}') as n`)).n,
+    );
+
+  /** An IA-review order for this person, optionally more than one. */
+  async function buyReviews(quantity = 1, status = "paid"): Promise<string> {
+    const { id } = await one<{ id: string }>(`
+      insert into public.orders
+        (provider, sku_slug, sku_name, plan, quantity, currency, amount_total_minor,
+         buyer_email, status, grants_ia_markings)
+      values ('stripe', 'ia-marking', 'IA Review', 'full', ${quantity}, 'usd',
+              ${4500 * quantity}, 'ia@example.com', '${status}', 1)
+      returning id`);
+    return id;
+  }
+
+  const claimIa = async (): Promise<number> =>
+    Number(
+      (await one<{ n: number }>(`select public.claim_orders_for_profile('${PERSON}') as n`)).n,
+    );
+
+  it("starts at nothing", async () => {
+    assert.equal(await balance(), 0);
+  });
+
+  it("credits one review per unit bought", async () => {
+    // Three sciences means three IAs. Buying three and receiving one is the
+    // bug this multiplication exists to prevent.
+    await buyReviews(3);
+    await claimIa();
+    assert.equal(await balance(), 3);
+  });
+
+  it("does not credit the same order twice", async () => {
+    // Webhook deliveries repeat as a matter of course, and claiming is called
+    // on every sign-in. Both must be safe to run again.
+    await claimIa();
+    await claimIa();
+    assert.equal(await balance(), 3, "re-claiming must not top the balance up again");
+  });
+
+  it("does not credit an order that has not settled", async () => {
+    // Authorisation is not payment. A direct debit is authorised days before
+    // the money arrives, and can still fail afterwards.
+    await buyReviews(2, "authorised");
+    await claimIa();
+    assert.equal(await balance(), 3);
+  });
+
+  it("spends one credit at a time", async () => {
+    const left = await one<{ n: number }>(
+      `select public.spend_ia_credit('${iaStudentId}', 'Biology HL') as n`,
+    );
+    assert.equal(Number(left.n), 2);
+    assert.equal(await balance(), 2);
+  });
+
+  it("refuses to spend what is not there", async () => {
+    await db.exec(`select public.spend_ia_credit('${iaStudentId}', 'two')`);
+    await db.exec(`select public.spend_ia_credit('${iaStudentId}', 'three')`);
+    assert.equal(await balance(), 0);
+
+    await assert.rejects(
+      () => db.query(`select public.spend_ia_credit('${iaStudentId}', 'four')`),
+      /No IA review credit available/,
+      "a zero balance must refuse rather than go negative",
+    );
+    assert.equal(await balance(), 0);
+  });
+
+  it("takes back unused credits on a refund", async () => {
+    const orderId = await buyReviews(2);
+    await claimIa();
+    assert.equal(await balance(), 2);
+
+    const { n } = await one<{ n: number }>(
+      `select public.revoke_ia_credits_for_order('${orderId}') as n`,
+    );
+    assert.equal(Number(n), 2);
+    assert.equal(await balance(), 0);
+  });
+
+  it("does not claw back a review the student has already read", async () => {
+    const orderId = await buyReviews(2);
+    await claimIa();
+    await db.exec(`select public.spend_ia_credit('${iaStudentId}', 'used one')`);
+    assert.equal(await balance(), 1);
+
+    const { n } = await one<{ n: number }>(
+      `select public.revoke_ia_credits_for_order('${orderId}') as n`,
+    );
+    // One back, not two. The work was done and the student has read it.
+    assert.equal(Number(n), 1);
+    assert.equal(await balance(), 0);
+  });
+
+  it("never takes a balance negative on a refund", async () => {
+    const orderId = await buyReviews(1);
+    await claimIa();
+    await db.exec(`select public.spend_ia_credit('${iaStudentId}', 'used it')`);
+    assert.equal(await balance(), 0);
+
+    const { n } = await one<{ n: number }>(
+      `select public.revoke_ia_credits_for_order('${orderId}') as n`,
+    );
+    assert.equal(Number(n), 0, "a debt is not something we agreed to extend");
+    assert.equal(await balance(), 0);
+  });
+
+  it("does not reverse the same refund twice", async () => {
+    const orderId = await buyReviews(2);
+    await claimIa();
+    await one(`select public.revoke_ia_credits_for_order('${orderId}') as n`);
+
+    await buyReviews(1);
+    await claimIa();
+    const before = await balance();
+
+    const { n } = await one<{ n: number }>(
+      `select public.revoke_ia_credits_for_order('${orderId}') as n`,
+    );
+    assert.equal(Number(n), 0);
+    assert.equal(
+      await balance(),
+      before,
+      "a second reversal must not take credits bought with another order",
+    );
+  });
+
+  it("refuses a review with a total when no marking happened", async () => {
+    /* The database's half of the rule the TypeScript also enforces. A mark out
+       of 24 on work nobody had the descriptors for is the single output this
+       whole subsystem exists to prevent, so it is refused in two places. */
+    const { id: submissionId } = await one<{ id: string }>(`
+      insert into public.ia_submissions
+        (student_id, subject, level, session_month, session_year, stage,
+         storage_path, file_name, file_size, file_hash)
+      values ('${iaStudentId}', 'biology', 'HL', 'May', 2026, 'final',
+              'ia/x/y.pdf', 'y.pdf', 1024, 'abc')
+      returning id`);
+
+    await assert.rejects(
+      () =>
+        db.query(`insert into public.ia_reviews
+          (submission_id, rubric_id, prompt_version, model_id, mode, total, max_total, body)
+          values ('${submissionId}', 'biology_fa2025', 'v1', 'gpt-4.1',
+                  'feedback_only', 18, 24, '{}'::jsonb)`),
+      /ia_reviews_no_total_without_marking/,
+    );
+
+    // The same row without a total is fine, which is what feedback mode writes.
+    await db.exec(`insert into public.ia_reviews
+      (submission_id, rubric_id, prompt_version, model_id, mode, total, max_total, body)
+      values ('${submissionId}', 'biology_fa2025', 'v1', 'gpt-4.1',
+              'feedback_only', null, 24, '{}'::jsonb)`);
+  });
+
+  it("refuses to call a review calibrated", async () => {
+    // Nothing here has been measured against real reference marks. Changing
+    // that string should require changing this constraint on purpose.
+    const { id: submissionId } = await one<{ id: string }>(`
+      insert into public.ia_submissions
+        (student_id, subject, level, session_month, session_year, stage,
+         storage_path, file_name, file_size, file_hash)
+      values ('${iaStudentId}', 'chemistry', 'SL', 'May', 2026, 'final',
+              'ia/z/z.pdf', 'z.pdf', 1024, 'def')
+      returning id`);
+
+    await assert.rejects(
+      () =>
+        db.query(`insert into public.ia_reviews
+          (submission_id, rubric_id, prompt_version, model_id, mode,
+           calibration_status, max_total, body)
+          values ('${submissionId}', 'chemistry_fa2025', 'v1', 'gpt-4.1',
+                  'marking', 'validated', 24, '{}'::jsonb)`),
+      /calibration_status/,
+    );
+  });
+
+  it("keeps the descriptors away from everybody but administrators", async () => {
+    // Licensed text. A student reading it through the API is how it ends up
+    // somewhere it should not be, so there is no student or tutor policy at
+    // all — not a narrower one.
+    const policies = await db.query<{ policyname: string }>(
+      `select policyname from pg_policies
+        where schemaname = 'public' and tablename = 'ia_assessment_packs'`,
+    );
+    assert.deepEqual(
+      policies.rows.map((r) => r.policyname),
+      ["ia_assessment_packs: admin all"],
+    );
+  });
+});

@@ -7,6 +7,10 @@
    components.
    ========================================================================== */
 
+/* The one import in this file. lib/ia/ does not import back, so there is no
+   cycle — and it is type-only in any case, so nothing survives compilation. */
+import type { IaReview } from "@/lib/ia/schema";
+
 export const USER_ROLES = ["student", "tutor", "admin", "parent"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -381,4 +385,79 @@ export interface PreLessonBriefing {
   openHomework: string[];
   suggestedCheck: string | null;
   suggestedNextTopics: string[];
+}
+
+/* ==========================================================================
+   IA review
+   --------------------------------------------------------------------------
+   An internal assessment, uploaded by a student and read against the published
+   criteria. The domain shapes; the marking itself is in lib/ia/.
+
+   `IaReviewRecord` deliberately keeps the review body opaque here. Its shape
+   is a versioned contract in lib/ia/schema.ts, and a second declaration of it
+   in this file would be a second thing to keep in step with the model's output
+   — with nothing to notice when they drift apart.
+   ========================================================================== */
+
+export const IA_SUBMISSION_STATUSES = ["uploaded", "reviewing", "reviewed", "failed"] as const;
+export type IaSubmissionStatus = (typeof IA_SUBMISSION_STATUSES)[number];
+
+export interface IaSubmission {
+  id: string;
+  studentId: string;
+  subject: "biology" | "chemistry" | "maths_aa";
+  level: "SL" | "HL";
+  /** "May 2027" — what selects the marking model. */
+  session: string;
+  stage: "partial_draft" | "complete_draft" | "final";
+  fileName: string;
+  fileSize: number;
+  fileHash: string;
+  wordCount: number | null;
+  studentNote: string | null;
+  status: IaSubmissionStatus;
+  failureNote: string | null;
+  /** Set when the student asked for a person to read it. */
+  professionalReviewRequestedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IaReviewRecord {
+  id: string;
+  submissionId: string;
+  rubricId: string;
+  packVersion: string | null;
+  mode: "marking" | "feedback_only";
+  calibrationStatus: "uncalibrated";
+  total: number | null;
+  maxTotal: number;
+  body: IaReview;
+  createdAt: string;
+}
+
+/** A submission with whatever reviews it has, newest first. */
+export interface IaSubmissionWithReviews {
+  submission: IaSubmission;
+  reviews: IaReviewRecord[];
+}
+
+/**
+ * What a student may spend, and why they have it.
+ *
+ * The balance is derived from the ledger rather than stored, so `entries` and
+ * `balance` cannot disagree — and the entries are what answer "where did my
+ * second credit go?" without anyone having to look in the database.
+ */
+export interface IaCreditLedger {
+  balance: number;
+  entries: IaCreditEntry[];
+}
+
+export interface IaCreditEntry {
+  id: string;
+  delta: number;
+  reason: "purchase" | "admin_grant" | "review" | "refund" | "correction";
+  note: string | null;
+  createdAt: string;
 }

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { looksLikeEmail, resolveStudent, splitName } from "@/lib/payments/enrolment";
+import {
+  looksLikeEmail,
+  readGuardianAnswer,
+  resolveParent,
+  resolveStudent,
+  splitName,
+} from "@/lib/payments/enrolment";
 
 /* ==========================================================================
    Who a payment is for
@@ -119,6 +125,126 @@ describe("email sanity", () => {
   it("rejects what a person mistypes", () => {
     for (const bad of ["", null, undefined, "a@b", "a b@c.com", "@b.com", "a@.com", "a@b."]) {
       assert.equal(looksLikeEmail(bad as string), false, String(bad));
+    }
+  });
+});
+
+/* ==========================================================================
+   Who gets a parent account
+   --------------------------------------------------------------------------
+   A yes here creates an account that can read a student's lessons, homework
+   and progress for as long as nobody removes it. So the question is not "did
+   somebody else pay" — it is "did the payer say they were the parent" — and
+   every case that is not an unambiguous yes has to come back null.
+   ========================================================================== */
+
+const sophia = resolveStudent({
+  buyerEmail: "helen@example.com",
+  buyerName: "Helen Thompson",
+  studentEmail: "sophia@example.com",
+  studentName: "Sophia Thompson",
+});
+
+describe("resolving the parent", () => {
+  it("gives the buyer an account when they say they are the parent", () => {
+    const parent = resolveParent({
+      buyerEmail: "helen@example.com",
+      buyerName: "Helen Thompson",
+      isGuardian: true,
+      student: sophia,
+    });
+    assert.equal(parent?.email, "helen@example.com");
+    assert.equal(parent?.firstName, "Helen");
+    assert.equal(parent?.lastName, "Thompson");
+    assert.equal(parent?.studentEmail, "sophia@example.com");
+  });
+
+  it("gives nobody an account when the buyer says they are not", () => {
+    // Paying for an adult friend's tuition buys lessons, not a view of them.
+    assert.equal(
+      resolveParent({
+        buyerEmail: "helen@example.com",
+        buyerName: "Helen Thompson",
+        isGuardian: false,
+        student: sophia,
+      }),
+      null,
+    );
+  });
+
+  it("gives nobody an account when the buyer is the student", () => {
+    const self = resolveStudent({
+      buyerEmail: "marcus@example.com",
+      buyerName: "Marcus Adeyemi",
+      studentEmail: null,
+      studentName: null,
+    });
+    // Ticking the box while buying for yourself must not make you your own
+    // parent — the link would be a self-reference with a real access grant.
+    assert.equal(
+      resolveParent({
+        buyerEmail: "marcus@example.com",
+        buyerName: "Marcus Adeyemi",
+        isGuardian: true,
+        student: self,
+      }),
+      null,
+    );
+  });
+
+  it("gives nobody an account when the two addresses are the same", () => {
+    const same = resolveStudent({
+      buyerEmail: "helen@example.com",
+      buyerName: "Helen Thompson",
+      studentEmail: "HELEN@example.com",
+      studentName: "Helen Thompson",
+    });
+    assert.equal(
+      resolveParent({
+        buyerEmail: "helen@example.com",
+        buyerName: "Helen Thompson",
+        isGuardian: true,
+        student: same,
+      }),
+      null,
+    );
+  });
+
+  it("gives nobody an account when there is no student to be a parent of", () => {
+    assert.equal(
+      resolveParent({
+        buyerEmail: "helen@example.com",
+        buyerName: "Helen Thompson",
+        isGuardian: true,
+        student: null,
+      }),
+      null,
+    );
+  });
+
+  it("lower-cases the addresses it records", () => {
+    const parent = resolveParent({
+      buyerEmail: "  Helen@Example.com ",
+      buyerName: "Helen Thompson",
+      isGuardian: true,
+      student: sophia,
+    });
+    assert.equal(parent?.email, "helen@example.com");
+  });
+});
+
+describe("reading the guardian answer", () => {
+  it("accepts an explicit yes, however it is cased", () => {
+    for (const value of ["yes", "Yes", " YES "]) {
+      assert.equal(readGuardianAnswer(value), true, `${value} should read as yes`);
+    }
+  });
+
+  it("treats everything else as a no", () => {
+    // An unanswered optional field arrives as undefined. Defaulting that to
+    // yes would hand out a child's records to anyone who skipped the question.
+    for (const value of ["no", "", "   ", null, undefined, "true", "1"]) {
+      assert.equal(readGuardianAnswer(value), false, `${String(value)} should read as no`);
     }
   });
 });

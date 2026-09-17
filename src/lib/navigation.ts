@@ -11,6 +11,7 @@ export interface NavItem {
     | "calendar"
     | "checklist"
     | "chart"
+    | "card"
     | "folder"
     | "people"
     | "user"
@@ -33,6 +34,7 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/student/homework", label: "Homework", icon: "checklist" },
     { href: "/student/progress", label: "Progress", icon: "chart" },
     { href: "/student/resources", label: "Resources", icon: "folder" },
+    { href: "/student/ia-review", label: "IA Review", icon: "spark" },
     { href: "/student/question-banks", label: "Question Banks", icon: "book" },
     { href: "/student/papers", label: "Mock Papers", icon: "checklist" },
   ],
@@ -51,6 +53,7 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/admin/lessons", label: "Lessons", icon: "calendar" },
     { href: "/admin/assignments", label: "Assignments", icon: "checklist" },
     { href: "/admin/orders", label: "Orders", icon: "chart" },
+    { href: "/admin/ia-reviews", label: "IA Reviews", icon: "spark" },
     { href: "/admin/notetaker", label: "AI Notetaker", icon: "spark" },
     { href: "/admin/settings", label: "Settings", icon: "settings" },
   ],
@@ -58,6 +61,7 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/parent", label: "Home", icon: "home", exact: true },
     { href: "/parent/lessons", label: "Lessons", icon: "calendar" },
     { href: "/parent/progress", label: "Progress", icon: "chart" },
+    { href: "/parent/billing", label: "Billing", icon: "card" },
   ],
 };
 

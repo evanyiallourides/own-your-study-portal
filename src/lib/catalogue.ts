@@ -141,12 +141,20 @@ export interface Sku {
   /** Whether Checkout should let the buyer change the quantity. */
   quantityAdjustable: boolean;
   /**
-   * What buying it entitles the buyer to. Only the question bank grants
-   * anything directly: the >=20 hour packages already earn it through the
-   * pooled-hours rule in has_question_bank_access(), and duplicating that
-   * here would be a second source of truth for the same entitlement.
+   * What buying it entitles the buyer to, applied on settlement.
+   *
+   * Two things are granted this way and they behave differently on purpose.
+   * `questionBankDays` is a licence with an end date; a renewal extends it.
+   * `iaMarkings` is a countable credit; a second purchase adds to the balance
+   * rather than replacing it, because somebody sitting three sciences has
+   * three IAs and buys three reviews.
+   *
+   * The >=20 hour packages are absent from both. They already earn question
+   * bank access through the pooled-hours rule in has_question_bank_access(),
+   * and duplicating that here would be a second source of truth for one
+   * entitlement.
    */
-  grants: { questionBankDays: number } | null;
+  grants: { questionBankDays?: number; iaMarkings?: number } | null;
   /** IB is the only sub-site that ships question banks. */
   ibOnly: boolean;
   instalments: Instalments | null;
@@ -301,6 +309,28 @@ export const CATALOGUE: readonly Sku[] = [
     instalments: null,
   },
   {
+    slug: "ia-marking",
+    name: "IA Review",
+    blurb: "One internal assessment read against the criteria, with a marked-up action plan.",
+    group: "module",
+    // The only SKU under a hundred dollars, and the only one sold by the unit
+    // to somebody who has never spoken to us. Both are deliberate: it is the
+    // way into the practice for a student who would not book six hours.
+    amounts: { usd: 45, eur: 39, gbp: 34, aud: 69 },
+    hours: null,
+    // Three sciences means three IAs. Sold one at a time, bought in threes.
+    quantityAdjustable: true,
+    grants: { iaMarkings: 1 },
+    // Biology, Chemistry and Maths AA are IB subjects, but an IB student
+    // reaching this from the A Level site is still an IB student. The gate
+    // that matters is the subject picker on the upload form, not the sub-site
+    // the click came from.
+    ibOnly: false,
+    // No instalment option, for the same reason the question bank has none:
+    // the first payment would hand over the thing being sold.
+    instalments: null,
+  },
+  {
     slug: "question-bank",
     name: "Question Bank Access",
     blurb: "A year of the question banks and the mock papers.",
@@ -424,7 +454,13 @@ export function gstComponent(audAmount: number): number {
  */
 export function taxCodeFor(sku: Sku): string {
   if (sku.hours !== null) return "txcd_20060045"; // Training Services - Live Virtual
-  if (sku.grants) return "txcd_20060058"; // Training Services - Self-study Web-based
+  /* Self-study is a library the student works through unaided — the question
+     banks and the mock papers. It is keyed off that specific grant rather than
+     off `grants` being set at all, because an IA review also grants something
+     and is not a library: it is a written report returned to the buyer, which
+     is the same shape as the profile review and takes the same code. Getting
+     this wrong is not cosmetic; the code decides who pays Australian GST. */
+  if (sku.grants?.questionBankDays) return "txcd_20060058"; // Self-study Web-based
   return "txcd_20060000"; // Professional Services
 }
 

@@ -29,10 +29,14 @@ import {
   DEMO_PROGRESS,
   DEMO_TRANSCRIPTS,
 } from "@/lib/demo/content";
+import { DEMO_IA_REVIEW, DEMO_IA_SUBMISSION } from "@/lib/demo/ia";
 import { calendarDayDelta, zonedParts } from "@/lib/timezone";
 import type {
   Order,
   AppSettings,
+  IaCreditEntry,
+  IaReviewRecord,
+  IaSubmission,
   Assignment,
   HomeworkItem,
   Lesson,
@@ -55,7 +59,7 @@ interface DemoState {
   students: Student[];
   tutors: Tutor[];
   parents: Parent[];
-  parentStudents: { parentId: string; studentId: string }[];
+  parentStudents: { parentId: string; studentId: string; relationship?: string | null }[];
   subjects: Subject[];
   studentSubjects: { id: string; studentId: string; subjectId: string; active: boolean }[];
   assignments: Assignment[];
@@ -73,6 +77,10 @@ interface DemoState {
   >;
   /** Seeded to cover every state the orders screen can render. */
   orders: Order[];
+  /* -- IA review -- */
+  iaCredits: Record<string, IaCreditEntry[]>;
+  iaSubmissions: IaSubmission[];
+  iaReviews: IaReviewRecord[];
   settings: AppSettings;
   /** The calendar day the dates above were resolved against. */
   seededOn: string;
@@ -100,6 +108,30 @@ function seed(): DemoState {
     // which exercises the more interesting of the two routes in.
     questionBankAccess: {},
     orders: clone(DEMO_ORDERS),
+    /* One credit and one finished review. Both, because they show different
+       halves: the credit puts the upload form at the top of the page, and the
+       review is the only way to see the deliverable at all without an API key.
+
+       The seeded review is feedback-only, which is what a deployment with no
+       descriptors installed actually produces — see lib/demo/ia.ts. */
+    iaCredits: { "s-sophia": [
+      {
+        id: "ia-credit-seed",
+        delta: 2,
+        reason: "admin_grant",
+        note: "Included with the demo account",
+        createdAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+      },
+      {
+        id: "ia-credit-spent",
+        delta: -1,
+        reason: "review",
+        note: "Biology HL, May 2027",
+        createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+      },
+    ] },
+    iaSubmissions: clone([DEMO_IA_SUBMISSION]),
+    iaReviews: clone([DEMO_IA_REVIEW]),
     settings: {
       notetakerEnabledGlobally: true,
       notetakerDisplayName: "Own Your Study AI Notetaker",

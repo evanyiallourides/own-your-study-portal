@@ -33,6 +33,7 @@ const instalmentOrder = (over: Partial<OrderState> = {}): OrderState => ({
   amountTotalMinor: 132000,
   amountPaidMinor: 0,
   grantsQuestionBankDays: null,
+  grantsIaMarkings: null,
   ...over,
 });
 
@@ -45,6 +46,25 @@ const bankOrder = (over: Partial<OrderState> = {}): OrderState => ({
   amountTotalMinor: 12000,
   amountPaidMinor: 0,
   grantsQuestionBankDays: 365,
+  grantsIaMarkings: null,
+  ...over,
+});
+
+/* An order that grants the OTHER entitlement. It exists because every revoke
+   path used to test `grantsQuestionBankDays !== null` by name, so an order
+   granting IA review credits was silently exempt from all of them — refunded,
+   and the credits stayed. The tests below are the reason a third entitlement
+   will not repeat it. */
+const reviewOrder = (over: Partial<OrderState> = {}): OrderState => ({
+  id: "ord_ia",
+  plan: "full",
+  status: "pending",
+  instalmentMonths: null,
+  instalmentsPaid: 0,
+  amountTotalMinor: 4500,
+  amountPaidMinor: 0,
+  grantsQuestionBankDays: null,
+  grantsIaMarkings: 1,
   ...over,
 });
 
@@ -182,6 +202,7 @@ describe("instalments", () => {
         instalmentsPaid: 2,
         amountPaidMinor: 66000,
         grantsQuestionBankDays: 365,
+  grantsIaMarkings: null,
       }),
     );
     assert.equal(plan.status, "past_due");
@@ -207,6 +228,7 @@ describe("instalments", () => {
         instalmentsPaid: 2,
         amountPaidMinor: 66000,
         grantsQuestionBankDays: 365,
+  grantsIaMarkings: null,
       }),
     );
     assert.equal(plan.status, "cancelled");
@@ -232,6 +254,37 @@ describe("refunds and disputes", () => {
     assert.equal(plan.status, undefined);
     assert.equal(plan.entitlement, undefined);
     assert.equal(plan.payment?.detail, "Partial refund");
+  });
+
+  it("revokes IA review credits on a full refund too", () => {
+    const plan = planFor(
+      signal({ kind: "refunded", objectId: "ch_ia", amountRefundedMinor: 4500 }),
+      reviewOrder({ status: "paid", amountPaidMinor: 4500 }),
+    );
+    assert.equal(plan.status, "refunded");
+    assert.equal(
+      plan.entitlement,
+      "revoke",
+      "an order granting review credits must be revocable like any other",
+    );
+  });
+
+  it("grants IA review credits when the payment settles", () => {
+    const plan = planFor(
+      signal({ kind: "settled", objectId: "pi_ia", amountMinor: 4500 }),
+      reviewOrder(),
+    );
+    assert.equal(plan.status, "paid");
+    assert.equal(plan.entitlement, "grant");
+  });
+
+  it("still grants nothing on authorisation alone", () => {
+    // Direct debit is authorised days before the money arrives and can fail
+    // afterwards. This holds for review credits exactly as it does for the
+    // question banks.
+    const plan = planFor(signal({ kind: "authorised" }), reviewOrder());
+    assert.equal(plan.status, "authorised");
+    assert.equal(plan.entitlement, undefined);
   });
 
   it("flags a dispute without revoking", () => {

@@ -21,6 +21,7 @@ import {
   type LessonFilter,
   type LessonMeetingInput,
   type LessonNotesPatch,
+  type CreateIaSubmissionInput,
   type Repository,
   type SubjectInput,
   type UpdateLessonInput,
@@ -37,10 +38,12 @@ import {
   mapStudent,
   mapSubject,
   mapTranscript,
+  mapParent,
   mapTutor,
 } from "@/lib/data/mappers";
 import type {
   Order,
+  Parent,
   OrderPayment,
   OrderStatus,
   AppSettings,
@@ -61,7 +64,13 @@ import type {
   Transcript,
   Tutor,
   QuestionBankAccess,
+  IaCreditEntry,
+  IaCreditLedger,
+  IaReviewRecord,
+  IaSubmission,
+  IaSubmissionWithReviews,
 } from "@/lib/types";
+import type { IaReview } from "@/lib/ia/schema";
 
 /* `students` holds two foreign keys to `profiles` — `profile_id` and
    `consent_recorded_by` — so a bare `profiles(*)` embed is ambiguous and
@@ -81,6 +90,7 @@ const STUDENT_SELECT = `*, ${STUDENT_PROFILE}`;
 
 /** `tutors` links to `profiles` once, so this needs no disambiguation. */
 const TUTOR_SELECT = `*, profile:profiles(*)`;
+const PARENT_SELECT = `*, profile:profiles(*)`;
 
 /** Signed URLs are minted per read and expire quickly — a lesson board should
  *  not be forwardable a week later. */
@@ -361,6 +371,163 @@ export class SupabaseRepository implements Repository {
     if (error) fail("Could not update question bank access", error);
   }
 
+  /* ==========================================================================
+     IA review
+     --------------------------------------------------------------------------
+     Reads run as the signed-in user, so RLS decides whose coursework is
+     visible. The two writes that must not be forgeable — spending a credit and
+     storing a review — go through SQL functions and the API's service-role
+     client respectively, for the reason set out in the migration: a client
+     that could write these directly could have a review without paying for
+     one.
+     ========================================================================== */
+
+  async getIaCredits(studentId: string): Promise<IaCreditLedger> {
+    const [balance, entries] = await Promise.all([
+      this.db.rpc("ia_credit_balance", { p_student_id: studentId }),
+      this.db
+        .from("ia_credit_entries")
+        .select("id, delta, reason, note, created_at")
+        .eq("student_id", studentId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+    ]);
+
+    if (entries.error) fail("Could not load IA credits", entries.error);
+
+    return {
+      balance: (balance.data as number | null) ?? 0,
+      entries: (entries.data ?? []).map(
+        (row: Record<string, unknown>): IaCreditEntry => ({
+          id: row.id as string,
+          delta: row.delta as number,
+          reason: row.reason as IaCreditEntry["reason"],
+          note: (row.note as string | null) ?? null,
+          createdAt: row.created_at as string,
+        }),
+      ),
+    };
+  }
+
+  async grantIaCredits(studentId: string, count: number, note: string): Promise<void> {
+    if (count === 0) return;
+    const { error } = await this.db.from("ia_credit_entries").insert({
+      student_id: studentId,
+      delta: count,
+      reason: count > 0 ? "admin_grant" : "correction",
+      note,
+      created_by: this.session.profile.id,
+    });
+    if (error) fail("Could not change IA review credits", error);
+  }
+
+  async spendIaCredit(studentId: string, note: string): Promise<number> {
+    /* The balance check and the ledger write are one statement inside the
+       database. Doing it in two round trips from here is how a student with
+       one credit and two browser tabs gets two reviews. */
+    const { data, error } = await this.db.rpc("spend_ia_credit", {
+      p_student_id: studentId,
+      p_note: note,
+    });
+    if (error) fail("Could not spend an IA review credit", error);
+    return (data as number | null) ?? 0;
+  }
+
+  async listIaSubmissions(
+    filter: { studentId?: string; escalatedOnly?: boolean } = {},
+  ): Promise<IaSubmissionWithReviews[]> {
+    let query = this.db
+      .from("ia_submissions")
+      .select(`*, reviews:ia_reviews(*)`)
+      .order("created_at", { ascending: false });
+
+    if (filter.studentId) query = query.eq("student_id", filter.studentId);
+    if (filter.escalatedOnly) query = query.not("professional_review_requested_at", "is", null);
+
+    const { data, error } = await query;
+    if (error) fail("Could not load IA submissions", error);
+    return (data ?? []).map(mapIaSubmissionRow);
+  }
+
+  async getIaSubmission(submissionId: string): Promise<IaSubmissionWithReviews | null> {
+    const { data, error } = await this.db
+      .from("ia_submissions")
+      .select(`*, reviews:ia_reviews(*)`)
+      .eq("id", submissionId)
+      .maybeSingle();
+    if (error) fail("Could not load that IA submission", error);
+    return data ? mapIaSubmissionRow(data as Record<string, unknown>) : null;
+  }
+
+  async createIaSubmission(input: CreateIaSubmissionInput): Promise<IaSubmission> {
+    const [month, year] = input.session.split(" ");
+    const { data, error } = await this.db
+      .from("ia_submissions")
+      .insert({
+        student_id: input.studentId,
+        subject: input.subject,
+        level: input.level,
+        session_month: month,
+        session_year: Number.parseInt(year ?? "", 10),
+        stage: input.stage,
+        storage_path: input.storagePath,
+        file_name: input.fileName,
+        file_size: input.fileSize,
+        file_hash: input.fileHash,
+        word_count: input.wordCount,
+        student_note: input.studentNote,
+      })
+      .select("*")
+      .single();
+
+    if (error || !data) fail("Could not record that submission", error);
+    return mapIaSubmission(data as Record<string, unknown>);
+  }
+
+  async setIaSubmissionStatus(
+    submissionId: string,
+    status: IaSubmission["status"],
+    failureNote: string | null = null,
+  ): Promise<void> {
+    const { error } = await this.db
+      .from("ia_submissions")
+      .update({ status, failure_note: failureNote })
+      .eq("id", submissionId);
+    if (error) fail("Could not update that submission", error);
+  }
+
+  async saveIaReview(submissionId: string, review: unknown): Promise<string> {
+    const body = review as IaReview;
+    const { data, error } = await this.db
+      .from("ia_reviews")
+      .insert({
+        submission_id: submissionId,
+        rubric_id: body.rubricId,
+        pack_version: body.assessmentPackVersion,
+        pack_checksum: body.assessmentPackChecksum,
+        prompt_version: body.promptVersion,
+        model_id: body.modelId,
+        mode: body.mode,
+        calibration_status: body.calibrationStatus,
+        total: body.total,
+        max_total: body.maxTotal,
+        body,
+      })
+      .select("id")
+      .single();
+
+    if (error || !data) fail("Could not store that review", error);
+    return (data as { id: string }).id;
+  }
+
+  async requestProfessionalReview(submissionId: string): Promise<void> {
+    const { error } = await this.db
+      .from("ia_submissions")
+      .update({ professional_review_requested_at: new Date().toISOString() })
+      .eq("id", submissionId);
+    if (error) fail("Could not record that request", error);
+  }
+
   async listTutors(search?: string): Promise<Tutor[]> {
     const { data, error } = await this.db.from("tutors").select(TUTOR_SELECT);
     if (error) fail("Could not load tutors", error);
@@ -481,6 +648,53 @@ export class SupabaseRepository implements Repository {
       .from("student_subjects")
       .upsert({ student_id: studentId, subject_id: subjectId, active: true }, { onConflict: "student_id,subject_id" });
     if (error) fail("Could not add the subject", error);
+  }
+
+  /* -- families ---------------------------------------------------------- */
+
+  async listParents(search?: string): Promise<Parent[]> {
+    const { data, error } = await this.db.from("parents").select(PARENT_SELECT);
+    if (error) fail("Could not load parents", error);
+    const parents = (data ?? []).map(mapParent);
+    if (!search) return parents.sort((a, b) => a.profile.fullName.localeCompare(b.profile.fullName));
+    const q = search.toLowerCase();
+    return parents.filter(
+      (p) => p.profile.fullName.toLowerCase().includes(q) || p.profile.email.toLowerCase().includes(q),
+    );
+  }
+
+  async listParentsForStudent(studentId: string): Promise<Parent[]> {
+    const { data, error } = await this.db
+      .from("parent_students")
+      .select(`parent:parents(${PARENT_SELECT})`)
+      .eq("student_id", studentId);
+    if (error) fail("Could not load the student's parents", error);
+    return (data ?? [])
+      .map((row) => mapParent((row as unknown as { parent: unknown }).parent))
+      .sort((a, b) => a.profile.fullName.localeCompare(b.profile.fullName));
+  }
+
+  async linkParentToStudent(
+    parentId: string,
+    studentId: string,
+    relationship: string | null,
+  ): Promise<void> {
+    const { error } = await this.db
+      .from("parent_students")
+      .upsert(
+        { parent_id: parentId, student_id: studentId, relationship },
+        { onConflict: "parent_id,student_id" },
+      );
+    if (error) fail("Could not link the parent", error);
+  }
+
+  async unlinkParentFromStudent(parentId: string, studentId: string): Promise<void> {
+    const { error } = await this.db
+      .from("parent_students")
+      .delete()
+      .eq("parent_id", parentId)
+      .eq("student_id", studentId);
+    if (error) fail("Could not remove the link", error);
   }
 
   /* -- lessons ----------------------------------------------------------- */
@@ -896,4 +1110,61 @@ export class SupabaseRepository implements Repository {
     }
     return counts;
   }
+}
+
+
+/* --------------------------------------------------------------------------
+   IA row mappers
+   --------------------------------------------------------------------------
+   Kept here rather than in mappers.ts because they are the only mappers that
+   read a jsonb column back into a typed document. The cast is unavoidable —
+   Postgres hands back `unknown` — but it is confined to these two functions
+   rather than spread across every page that displays a review.
+   -------------------------------------------------------------------------- */
+
+function mapIaSubmission(row: Record<string, unknown>): IaSubmission {
+  return {
+    id: row.id as string,
+    studentId: row.student_id as string,
+    subject: row.subject as IaSubmission["subject"],
+    level: row.level as IaSubmission["level"],
+    session: `${row.session_month as string} ${row.session_year as number}`,
+    stage: row.stage as IaSubmission["stage"],
+    fileName: row.file_name as string,
+    fileSize: row.file_size as number,
+    fileHash: row.file_hash as string,
+    wordCount: (row.word_count as number | null) ?? null,
+    studentNote: (row.student_note as string | null) ?? null,
+    status: row.status as IaSubmission["status"],
+    failureNote: (row.failure_note as string | null) ?? null,
+    professionalReviewRequestedAt:
+      (row.professional_review_requested_at as string | null) ?? null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapIaReview(row: Record<string, unknown>): IaReviewRecord {
+  return {
+    id: row.id as string,
+    submissionId: row.submission_id as string,
+    rubricId: row.rubric_id as string,
+    packVersion: (row.pack_version as string | null) ?? null,
+    mode: row.mode as IaReviewRecord["mode"],
+    calibrationStatus: "uncalibrated",
+    total: (row.total as number | null) ?? null,
+    maxTotal: row.max_total as number,
+    body: row.body as IaReview,
+    createdAt: row.created_at as string,
+  };
+}
+
+function mapIaSubmissionRow(row: Record<string, unknown>): IaSubmissionWithReviews {
+  const reviews = ((row.reviews as Record<string, unknown>[] | null) ?? [])
+    .map(mapIaReview)
+    // Newest first. PostgREST does not order an embedded relation for us, and
+    // a page that shows "your review" wants the latest one, not the first.
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return { submission: mapIaSubmission(row), reviews };
 }

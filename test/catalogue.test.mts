@@ -220,18 +220,58 @@ describe("catalogue", () => {
     }
   });
 
-  it("grants an entitlement from exactly one SKU", () => {
-    // question_bank_access is written by a webhook for this SKU alone. The >=20
-    // hour packages reach the same entitlement through pooled hours, in SQL; a
-    // grant here as well would be a second source of truth for one fact.
-    const granting = CATALOGUE.filter((s) => s.grants !== null);
+  it("grants each entitlement from exactly one SKU", () => {
+    /* Two entitlements are granted at checkout, and each has exactly one
+       source. question_bank_access is written for the question bank alone —
+       the >=20 hour packages reach the same entitlement through pooled hours,
+       in SQL, and a grant here as well would be a second source of truth for
+       one fact. IA review credits come only from the IA review SKU.
+
+       The rule under test is one-source-per-entitlement, not one-granting-SKU,
+       which is why this counts per key rather than asserting a list length. */
+    const grantsBankDays = CATALOGUE.filter((s) => s.grants?.questionBankDays);
     assert.deepEqual(
-      granting.map((s) => s.slug),
+      grantsBankDays.map((s) => s.slug),
       ["question-bank"],
+      "question bank access must be granted by one SKU and no other",
     );
-    const bank = granting[0];
-    assert.ok(bank);
-    assert.equal(bank.grants?.questionBankDays, 365);
+    assert.equal(grantsBankDays[0]?.grants?.questionBankDays, 365);
+
+    const grantsMarkings = CATALOGUE.filter((s) => s.grants?.iaMarkings);
+    assert.deepEqual(
+      grantsMarkings.map((s) => s.slug),
+      ["ia-marking"],
+      "IA review credits must be granted by one SKU and no other",
+    );
+    assert.equal(grantsMarkings[0]?.grants?.iaMarkings, 1);
+
+    // Nothing grants both. They renew by different rules — a licence extends,
+    // a credit accumulates — and one SKU doing both would force one rule onto
+    // the other.
+    for (const sku of CATALOGUE) {
+      const both = Boolean(sku.grants?.questionBankDays) && Boolean(sku.grants?.iaMarkings);
+      assert.equal(both, false, `${sku.slug} grants two different kinds of entitlement`);
+    }
+  });
+
+  it("prices the IA review from the same USD base as everything else", () => {
+    /* The one SKU under a hundred dollars, and the only one sold by the unit
+       to somebody who has never spoken to us — so its conversions are worth
+       asserting rather than assuming. Same rule as the ladder: convert from
+       USD, gross AUD up for GST, round up, whole units only. */
+    const review = skuFor("ia-marking");
+    assert.ok(review);
+    assert.equal(review.amounts.usd, 45);
+
+    for (const c of CURRENCIES) {
+      if (c === "usd") continue;
+      const gross = c === "aud" ? GST_MULTIPLIER : 1;
+      assert.equal(
+        review.amounts[c],
+        Math.ceil(review.amounts.usd * FX[c] * gross - 1e-9),
+        `${c} is not the USD price converted and rounded up`,
+      );
+    }
   });
 
   it("sells the question bank only from the sub-site that ships it", () => {

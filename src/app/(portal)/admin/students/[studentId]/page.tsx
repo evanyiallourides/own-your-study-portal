@@ -3,9 +3,12 @@ import { notFound } from "next/navigation";
 
 import { LessonCard } from "@/components/portal/lesson-cards";
 import {
+  FamilyLinks,
   QuestionBankAccessForm,
   ToggleAssignmentButton,
 } from "@/components/portal/admin-forms";
+import { IaCreditForm } from "@/components/portal/ia-credit-form";
+import { IaStudentPanel } from "@/components/portal/ia-student-panel";
 import { ChevronLeftIcon } from "@/components/ui/icons";
 import { Avatar, Badge, Card, KeyValue, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
@@ -27,12 +30,19 @@ export default async function AdminStudentPage({
   const student = await repo.getStudent(studentId);
   if (!student) notFound();
 
-  const [assignments, subjects, lessons, questionBanks] = await Promise.all([
-    repo.listAssignments({ studentId }),
-    repo.listStudentSubjects(studentId),
-    repo.listLessons({ studentId, order: "desc", limit: 20 }),
-    repo.getQuestionBankAccess(studentId),
-  ]);
+  const [assignments, subjects, lessons, questionBanks, parents, allParents, iaCredits, iaSubmissions] =
+    await Promise.all([
+      repo.listAssignments({ studentId }),
+      repo.listStudentSubjects(studentId),
+      repo.listLessons({ studentId, order: "desc", limit: 20 }),
+      repo.getQuestionBankAccess(studentId),
+      repo.listParentsForStudent(studentId),
+      repo.listParents(),
+      /* Both swallowed: a portal whose IA migration has not been applied yet
+         should still show an administrator everything else about a student. */
+      repo.getIaCredits(studentId).catch(() => ({ balance: 0, entries: [] })),
+      repo.listIaSubmissions({ studentId }).catch(() => []),
+    ]);
 
   const consent = student.consent;
   const consentComplete =
@@ -130,6 +140,39 @@ export default async function AdminStudentPage({
         />
         <Card>
           <QuestionBankAccessForm studentId={studentId} access={questionBanks} />
+        </Card>
+      </section>
+
+      <section>
+        <SectionHead
+          title="IA review credits"
+          description="What this student has left to spend. Credits arrive from a purchase; this is for putting things right by hand, and every change leaves a row."
+        />
+        <Card>
+          <IaCreditForm studentId={studentId} ledger={iaCredits} />
+        </Card>
+      </section>
+
+      {iaSubmissions.length > 0 ? (
+        <IaStudentPanel
+          entries={iaSubmissions}
+          hrefBase={`/admin/students/${studentId}/ia`}
+          creditBalance={iaCredits.balance}
+        />
+      ) : null}
+
+      <section>
+        <SectionHead
+          title="Parents"
+          description="Who can see this student's lessons, homework and progress. A purchase adds a parent here when the buyer said they were one."
+        />
+        <Card>
+          <FamilyLinks
+            studentId={studentId}
+            studentName={student.profile.firstName || student.profile.fullName}
+            linked={parents}
+            candidates={allParents}
+          />
         </Card>
       </section>
 

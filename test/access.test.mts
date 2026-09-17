@@ -217,6 +217,68 @@ describe("a parent", () => {
   it("cannot reach the tutor's private notes", async () => {
     await rejects(repoFor("p-helen").getLessonNotesForTutor("l-chem-8"));
   });
+
+  it("cannot browse the other families on the roll", async () => {
+    // listParents is how an administrator picks somebody to link. A parent
+    // reaching it would be reading a directory of every other family.
+    assert.deepEqual(await repoFor("p-helen").listParents(), []);
+  });
+
+  it("cannot link themselves to somebody else's child", async () => {
+    // The whole access model rests on parent_students, so writing to it is an
+    // administrator's job however plausible the caller looks.
+    await rejects(repoFor("p-helen").linkParentToStudent("pa-helen", "s-marcus", null));
+  });
+
+  it("cannot unlink themselves from oversight", async () => {
+    await rejects(repoFor("p-helen").unlinkParentFromStudent("pa-helen", "s-sophia"));
+  });
+});
+
+describe("who is linked to a student", () => {
+  it("is visible to an administrator", async () => {
+    const parents = await repoFor("p-admin").listParentsForStudent("s-sophia");
+    assert.deepEqual(
+      parents.map((p) => p.id),
+      ["pa-helen"],
+    );
+  });
+
+  it("is visible to the student themselves", async () => {
+    // Somebody is entitled to read your lessons and homework. Being able to
+    // find out who is the least a portal can do.
+    const parents = await repoFor("p-sophia").listParentsForStudent("s-sophia");
+    assert.deepEqual(
+      parents.map((p) => p.id),
+      ["pa-helen"],
+    );
+  });
+
+  it("is not visible to another student", async () => {
+    assert.deepEqual(await repoFor("p-marcus").listParentsForStudent("s-sophia"), []);
+  });
+
+  it("is visible to a tutor who teaches them", async () => {
+    // A tutor arranging a lesson should be able to see who the guardian is.
+    const parents = await repoFor("p-daniel").listParentsForStudent("s-sophia");
+    assert.deepEqual(
+      parents.map((p) => p.id),
+      ["pa-helen"],
+    );
+  });
+
+  it("is not visible to a tutor who does not teach them", async () => {
+    // Marcus has no parent in the demo set, so the link is made here first —
+    // otherwise this would pass against an empty answer and prove nothing.
+    // Daniel teaches only maths, and only Sophia.
+    await repoFor("p-admin").linkParentToStudent("pa-helen", "s-marcus", null);
+    assert.deepEqual(
+      (await repoFor("p-imogen").listParentsForStudent("s-marcus")).map((p) => p.id),
+      ["pa-helen"],
+      "the tutor who does teach him should see it",
+    );
+    assert.deepEqual(await repoFor("p-daniel").listParentsForStudent("s-marcus"), []);
+  });
 });
 
 describe("an admin", () => {
