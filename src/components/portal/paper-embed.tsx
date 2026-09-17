@@ -1,9 +1,5 @@
-"use client";
-
 import "@/styles/qbank.css";
 import "@/styles/qbank-embed.css";
-
-import { useVanillaViewer } from "@/components/portal/use-vanilla-viewer";
 
 /**
  * The mock-paper viewer, mounted inside the portal.
@@ -23,9 +19,7 @@ export function PaperEmbed({
   backHref?: string;
   viewHref?: string;
 }) {
-  useVanillaViewer("/question-bank/papers.js", "ppBoot", mode === "shelf" ? "pp-shelf" : "pp-root");
-
-  const config = {
+    const config = {
     "data-pp-base": "/api/papers/",
     ...(viewHref ? { "data-pp-view": viewHref } : {}),
     ...(backHref ? { "data-pp-back": backHref } : {}),

@@ -1,9 +1,5 @@
-"use client";
-
 import "@/styles/qbank.css";
 import "@/styles/qbank-embed.css";
-
-import { useVanillaViewer } from "@/components/portal/use-vanilla-viewer";
 
 /**
  * The question bank viewer, mounted inside the portal.
@@ -24,10 +20,10 @@ import { useVanillaViewer } from "@/components/portal/use-vanilla-viewer";
  * inline script: nothing has to run before the script loads, so there is no
  * ordering to get wrong.
  *
- * The script is loaded and booted by useVanillaViewer rather than by a
- * `<script>` in this markup. That comment is worth reading before changing it
- * back — the markup version rendered an empty shelf on every route into this
- * page, in two different ways.
+ * There is deliberately no `<script>` here and no effect. Both were tried and
+ * both left paying students looking at an empty shelf; ViewerHost in the portal
+ * layout does the loading and booting, and viewer-host.tsx explains why it has
+ * to live up there rather than next to the container it fills.
  */
 export function QuestionBankEmbed({
   mode,
@@ -38,9 +34,7 @@ export function QuestionBankEmbed({
   backHref?: string;
   viewHref?: string;
 }) {
-  useVanillaViewer("/question-bank/qbank.js", "qbBoot", mode === "shelf" ? "qb-shelf" : "qb-root");
-
-  const config = {
+    const config = {
     "data-qb-base": "/api/question-banks/",
     ...(viewHref ? { "data-qb-view": viewHref } : {}),
     ...(backHref ? { "data-qb-back": backHref } : {}),
