@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { LinkOrderForm, UnlinkOrderButton } from "@/components/portal/order-forms";
+import { AttachWiseTransferForm, LinkOrderForm, UnlinkOrderButton } from "@/components/portal/order-forms";
 import { Badge, Card, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
@@ -81,7 +81,20 @@ export default async function AdminOrders() {
   const session = await requireRole("admin");
   const repo = await repositoryFor(session);
 
-  const [orders, students] = await Promise.all([repo.listOrders(), repo.listStudents()]);
+  const [orders, students, unmatchedTransfers] = await Promise.all([
+    repo.listOrders(),
+    repo.listStudents(),
+    repo.listUnmatchedWiseTransfers(),
+  ]);
+
+  const pendingWiseOrders = orders
+    .filter((o) => o.provider === "wise" && o.status === "pending")
+    .map((o) => ({
+      id: o.id,
+      reference: o.paymentReference,
+      skuName: o.skuName,
+      buyerEmail: o.buyerEmail,
+    }));
 
   const unmatched = orders.filter(isUnmatched);
   const failing = orders.filter((o) => o.status === "past_due");
@@ -184,6 +197,45 @@ export default async function AdminOrders() {
           </div>
         )}
       </section>
+
+      {/* -- Wise transfers nobody's reference matched --------------------- */}
+      {unmatchedTransfers.length > 0 && (
+        <section className="space-y-4">
+          <SectionHead
+            title="Unmatched Wise transfers"
+            description="Bank transfers that arrived with a reference nobody recognised — the normal failure mode of a bank transfer, not a bug."
+          />
+          <div className="space-y-4">
+            {unmatchedTransfers.map((transfer) => (
+              <Card key={transfer.id} className="space-y-4 p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-semibold tabular-nums text-ink">
+                      {formatMoneyMinor(transfer.amountMinor, transfer.currency)}
+                    </p>
+                    <p className="text-sm text-ink-500">
+                      Quoted &ldquo;{transfer.referenceReceived || "(nothing)"}&rdquo; ·{" "}
+                      {formatDate(transfer.occurredAt)}
+                    </p>
+                  </div>
+                  <Badge tone="warning">No reference match</Badge>
+                </div>
+                {pendingWiseOrders.length === 0 ? (
+                  <p className="text-sm text-ink-500">
+                    No pending Wise orders to attach this to right now.
+                  </p>
+                ) : (
+                  <AttachWiseTransferForm
+                    transferId={transfer.id}
+                    referenceReceived={transfer.referenceReceived}
+                    orders={pendingWiseOrders}
+                  />
+                )}
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* -- plans in progress -------------------------------------------- */}
       {running.length > 0 && (

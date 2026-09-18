@@ -49,7 +49,7 @@ export interface ParentIdentity {
 }
 
 /** Nothing clever — enough to reject a typo, not enough to reject a real address. */
-export function looksLikeEmail(value: string | null | undefined): boolean {
+export function looksLikeEmail(value: string | null | undefined): value is string {
   if (!value) return false;
   const trimmed = value.trim();
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(trimmed) && trimmed.length <= 254;

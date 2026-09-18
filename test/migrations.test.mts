@@ -193,6 +193,71 @@ describe("the migrations", () => {
   });
 });
 
+describe("wise as a payment provider", () => {
+  it("widens payment_provider without dropping what it already accepted", async () => {
+    // A stray hardcoded constraint name would have failed this migration
+    // outright rather than accepting the wrong values, but this checks the
+    // one thing that actually matters regardless of how it was reached: the
+    // value space is right.
+    for (const value of ["stripe", "gocardless", "wise"]) {
+      await db.exec(`select '${value}'::public.payment_provider`);
+    }
+    await assert.rejects(
+      () => db.query(`select 'paypal'::public.payment_provider`),
+      /violates check constraint/,
+    );
+  });
+
+  it("keeps a Wise order's reference unique, but allows any number of blank ones", async () => {
+    await db.exec(`insert into public.orders
+      (provider, sku_slug, sku_name, plan, currency, amount_total_minor, buyer_email,
+       status, payment_reference)
+      values ('wise', 'single-session', 'Single Session', 'full', 'usd', 8000,
+              'a@example.com', 'pending', 'OYS-AB12CD')`);
+
+    await assert.rejects(
+      () =>
+        db.query(`insert into public.orders
+          (provider, sku_slug, sku_name, plan, currency, amount_total_minor, buyer_email,
+           status, payment_reference)
+          values ('wise', 'single-session', 'Single Session', 'full', 'usd', 8000,
+                  'b@example.com', 'pending', 'OYS-AB12CD')`),
+      /duplicate key/,
+      "two orders must never share one reference",
+    );
+
+    // Every Stripe/AUD order leaves this null, and null is not a duplicate of
+    // null — the index is partial so that stays true.
+    for (const email of ["c@example.com", "d@example.com"]) {
+      await db.exec(`insert into public.orders
+        (provider, sku_slug, sku_name, plan, currency, amount_total_minor, buyer_email, status)
+        values ('stripe', 'single-session', 'Single Session', 'full', 'aud', 12200,
+                '${email}', 'pending')`);
+    }
+  });
+
+  it("keeps the unmatched-transfers queue as an index, not a scan", async () => {
+    // Same shape as orders_unmatched_idx: the admin screen's actionable
+    // section is "money arrived, nobody to give it to".
+    const { indexdef } = await one<{ indexdef: string }>(
+      `select indexdef from pg_indexes where indexname = 'wise_unmatched_transfers_open_idx'`,
+    );
+    assert.match(indexdef, /matched_order_id IS NULL/i);
+  });
+
+  it("keeps unmatched Wise transfers away from everybody but administrators", async () => {
+    // Pre-attribution buyer data — the same reasoning that leaves `customers`
+    // administrator-only, with no student or parent policy at all.
+    const policies = await db.query<{ policyname: string }>(
+      `select policyname from pg_policies where tablename = 'wise_unmatched_transfers'`,
+    );
+    assert.deepEqual(
+      policies.rows.map((r) => r.policyname),
+      ["wise_unmatched_transfers: admin all"],
+    );
+  });
+});
+
 describe("claim_orders_for_profile", () => {
   it("never claims an order that has not been paid", async () => {
     await payFor("question-bank", { status: "pending" });

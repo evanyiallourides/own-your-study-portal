@@ -69,8 +69,10 @@ import type {
   IaReviewRecord,
   IaSubmission,
   IaSubmissionWithReviews,
+  WiseUnmatchedTransfer,
 } from "@/lib/types";
 import type { IaReview } from "@/lib/ia/schema";
+import { settleWiseTransfer } from "@/lib/payments/wise-settle";
 
 /* `students` holds two foreign keys to `profiles` — `profile_id` and
    `consent_recorded_by` — so a bare `profiles(*)` embed is ambiguous and
@@ -271,13 +273,14 @@ export class SupabaseRepository implements Repository {
       studentName: name || null,
       claimedAt: (row.claimed_at as string | null) ?? null,
       note: (row.note as string | null) ?? null,
+      paymentReference: (row.payment_reference as string | null) ?? null,
       createdAt: row.created_at as string,
       grantsQuestionBankDays: (row.grants_question_bank_days as number | null) ?? null,
     };
   }
 
   private static readonly ORDER_COLUMNS =
-    "id, provider, sku_slug, sku_name, plan, quantity, instalment_months, instalments_paid, currency, amount_total_minor, amount_paid_minor, tax_amount_minor, status, buyer_email, buyer_name, buyer_country, source_site, student_id, claimed_at, note, created_at, grants_question_bank_days, students ( profiles ( first_name, last_name ) )";
+    "id, provider, sku_slug, sku_name, plan, quantity, instalment_months, instalments_paid, currency, amount_total_minor, amount_paid_minor, tax_amount_minor, status, buyer_email, buyer_name, buyer_country, source_site, student_id, claimed_at, note, payment_reference, created_at, grants_question_bank_days, students ( profiles ( first_name, last_name ) )";
 
   async listOrders(filter?: { status?: OrderStatus[]; unmatchedOnly?: boolean }): Promise<Order[]> {
     let query = this.db
@@ -349,6 +352,54 @@ export class SupabaseRepository implements Repository {
       .from("orders")
       .update({ student_id: null, claimed_at: null, claimed_by: null })
       .eq("id", orderId);
+    if (error) throw new Error(error.message);
+  }
+
+  async listUnmatchedWiseTransfers(): Promise<WiseUnmatchedTransfer[]> {
+    const { data, error } = await this.db
+      .from("wise_unmatched_transfers")
+      .select("id, wise_transfer_id, amount_minor, currency, reference_received, occurred_at")
+      .is("matched_order_id", null)
+      .order("occurred_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => ({
+      id: r.id as string,
+      wiseTransferId: r.wise_transfer_id as string,
+      amountMinor: r.amount_minor as number,
+      currency: r.currency as string,
+      referenceReceived: (r.reference_received as string | null) ?? null,
+      occurredAt: r.occurred_at as string,
+    }));
+  }
+
+  async attachWiseTransferToOrder(transferId: string, orderId: string): Promise<void> {
+    const { data: transfer, error: findError } = await this.db
+      .from("wise_unmatched_transfers")
+      .select("wise_transfer_id, amount_minor, currency, matched_order_id")
+      .eq("id", transferId)
+      .maybeSingle();
+    if (findError) throw new Error(findError.message);
+    if (!transfer) throw new NotFoundError("That transfer no longer exists.");
+    if (transfer.matched_order_id) throw new Error("That transfer has already been matched.");
+
+    // Reuses exactly what the webhook would have done for an automatic match
+    // — the same status transition, the same entitlement, the same admin
+    // notifications on anything that still needs a person.
+    const settled = await settleWiseTransfer(this.db, orderId, {
+      transferId: transfer.wise_transfer_id,
+      amountMinor: transfer.amount_minor,
+      currency: transfer.currency,
+    });
+    if (!settled.ok) throw new Error(settled.reason);
+
+    const { error } = await this.db
+      .from("wise_unmatched_transfers")
+      .update({
+        matched_order_id: orderId,
+        matched_at: new Date().toISOString(),
+        matched_by: this.session.profile.id,
+      })
+      .eq("id", transferId);
     if (error) throw new Error(error.message);
   }
 

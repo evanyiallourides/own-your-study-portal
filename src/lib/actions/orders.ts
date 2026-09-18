@@ -85,3 +85,34 @@ export async function unlinkOrder(input: z.input<typeof unlinkSchema>): Promise<
     return toActionError(error);
   }
 }
+
+const attachWiseTransferSchema = z.object({
+  transferId: id,
+  orderId: id,
+});
+
+/**
+ * Attach an incoming Wise transfer to the order it paid for, by hand.
+ *
+ * The fallback for the normal failure mode of a bank transfer: the reference
+ * the webhook needed was mistyped or dropped somewhere along the payer's
+ * bank's own rails. Settling here runs exactly the same code the webhook
+ * would have — see wise-settle.ts — so a manual match and an automatic one
+ * can never disagree about what an order's payment should do.
+ */
+export async function attachWiseTransfer(
+  input: z.input<typeof attachWiseTransferSchema>,
+): Promise<ActionResult> {
+  await requireRole("admin");
+  const parsed = attachWiseTransferSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That was not a valid transfer or order." };
+
+  try {
+    const repo = await getRepository();
+    await repo.attachWiseTransferToOrder(parsed.data.transferId, parsed.data.orderId);
+    revalidatePath("/admin/orders");
+    return { ok: true };
+  } catch (error) {
+    return toActionError(error);
+  }
+}

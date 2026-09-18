@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
 import { repositoryFor } from "@/lib/data";
 import { greeting } from "@/lib/format";
-import { openAiStatus, recallStatus, isDemoMode } from "@/lib/env";
+import { openAiStatus, paymentsStatus, recallStatus, wiseStatus, isDemoMode } from "@/lib/env";
 import { NEEDS_REVIEW, PROCESSING } from "@/lib/status";
 
 export const metadata: Metadata = { title: "Overview" };
@@ -29,6 +29,8 @@ export default async function AdminOverview() {
 
   const openai = openAiStatus();
   const recall = recallStatus();
+  const stripePayments = paymentsStatus();
+  const wisePayments = wiseStatus();
 
   return (
     <div className="space-y-12">
@@ -120,7 +122,7 @@ export default async function AdminOverview() {
             </Link>
           }
         />
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Card>
             <div className="flex items-center justify-between gap-2">
               <p className="font-semibold text-ink">Database</p>
@@ -158,6 +160,26 @@ export default async function AdminOverview() {
                 Switched off for the organisation in Settings.
               </p>
             ) : null}
+          </Card>
+
+          <Card>
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold text-ink">Payments — AUD (Stripe)</p>
+              <Badge tone={stripePayments.configured ? "success" : "neutral"}>
+                {stripePayments.configured ? "Connected" : "Not configured"}
+              </Badge>
+            </div>
+            <p className="mt-2 text-sm text-ink-500">{stripePayments.detail}</p>
+          </Card>
+
+          <Card>
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold text-ink">Payments — USD/EUR/GBP (Wise)</p>
+              <Badge tone={wisePayments.configured ? "success" : "neutral"}>
+                {wisePayments.configured ? "Connected" : "Not configured"}
+              </Badge>
+            </div>
+            <p className="mt-2 text-sm text-ink-500">{wisePayments.detail}</p>
           </Card>
         </div>
       </section>

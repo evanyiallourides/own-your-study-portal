@@ -41,6 +41,7 @@ import type {
   IaCreditLedger,
   IaSubmission,
   IaSubmissionWithReviews,
+  WiseUnmatchedTransfer,
 } from "@/lib/types";
 
 export interface LessonFilter {
@@ -221,6 +222,11 @@ export interface Repository {
   linkOrderToStudent(orderId: string, studentId: string): Promise<void>;
   /** Detach it again, for a link made to the wrong person. */
   unlinkOrder(orderId: string): Promise<void>;
+
+  /** Wise transfers waiting for a person to say which order they paid for. */
+  listUnmatchedWiseTransfers(): Promise<WiseUnmatchedTransfer[]>;
+  /** Attach one to an order and settle it, exactly as the webhook would have. */
+  attachWiseTransferToOrder(transferId: string, orderId: string): Promise<void>;
 
   /* -- lessons -- */
   listLessons(filter: LessonFilter): Promise<LessonWithContext[]>;

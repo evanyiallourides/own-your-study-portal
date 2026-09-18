@@ -61,6 +61,7 @@ const order = (over: Partial<Order> = {}): Order => ({
   studentName: null,
   claimedAt: null,
   note: null,
+  paymentReference: null,
   createdAt: new Date().toISOString(),
   grantsQuestionBankDays: 365,
   ...over,

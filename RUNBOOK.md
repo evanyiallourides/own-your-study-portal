@@ -379,6 +379,51 @@ Nothing about the accuracy of a mark has been measured. Do not put an accuracy
 claim on the marketing site; the pricing page's wording is deliberately about
 what the review contains rather than how close it gets.
 
+### Payments (Wise)
+
+AUD sales run on Stripe as above and need nothing here. Every other
+currency (USD, EUR, GBP) is paid by direct bank transfer via Wise instead —
+see `src/lib/payments/provider.ts` for why.
+
+1. A Wise Business account with local receiving details for USD, EUR and
+   GBP. Run `./tools/set-wise-key.sh` for the API token — it keeps the token
+   out of your shell history the same way `set-stripe-key.sh` does for
+   Stripe's. Everything else below is real business/financial data rather
+   than a secret, so it goes straight into your env, but keep it out of chat
+   all the same.
+2. Set `WISE_ACCOUNT_HOLDER` and `WISE_USD_ACCOUNT_DETAILS` /
+   `WISE_EUR_ACCOUNT_DETAILS` / `WISE_GBP_ACCOUNT_DETAILS` — see the comments
+   in `portal/.env.example` for the exact shape. A currency left unset is
+   simply not offered yet; the checkout page refuses it gracefully rather
+   than showing broken instructions.
+3. Set `WISE_WEBHOOK_PUBLIC_KEY` to the PEM Wise currently publishes for
+   verifying webhook deliveries (sandbox and live keys differ — copy the one
+   for the mode you are actually running). **Confirm this against Wise's own
+   current developer docs before relying on it**: the webhook route
+   (`src/app/api/webhooks/wise/route.ts`) was written against Wise's
+   generally-documented shape, not against a real test delivery, and says so
+   in its own header comment.
+4. Register a webhook subscription in your Wise account pointed at
+   `<NEXT_PUBLIC_APP_URL>/api/webhooks/wise`, for the `incoming-transfer#credited`
+   event.
+5. **This project deploys via Vercel, not `wrangler secret put`** — see the
+   callout under "4 · First deploy" above. Add all of the `WISE_*` variables
+   in **Vercel → Settings → Environment Variables**, the same place the
+   Supabase and Stripe variables already live for this deployment.
+6. Test against Wise's sandbox first (`WISE_SANDBOX=true`, a sandbox API
+   token and webhook key), all the way through: start a checkout, send a
+   simulated transfer, confirm the order settles and the buyer is enrolled.
+   Only then switch to live values, and send yourself one small real transfer
+   per currency before expecting real customer traffic.
+7. If a transfer's reference is ever mistyped or dropped — the normal
+   failure mode of a bank transfer, not a bug — it lands in **Admin →
+   Orders → Unmatched Wise transfers** for a person to attach by hand.
+
+Instalment/payment-plan billing is switched off for every currency right
+now, not only for Wise — `INSTALMENTS_ENABLED` in `provider.ts` is the one
+place that decides, and the checkout route refuses `plan=instalments`
+uniformly while it is `false`.
+
 ---
 
 ## Afterwards

@@ -13,18 +13,23 @@ import {
 } from "@/lib/catalogue";
 import { env, isDemoMode } from "@/lib/env";
 import { bankDebitFor, explainRefusal } from "@/lib/payments/bank-debit";
+import { looksLikeEmail, readGuardianAnswer, resolveParent, resolveStudent } from "@/lib/payments/enrolment";
+import { INSTALMENTS_ENABLED, providerFor } from "@/lib/payments/provider";
 import {
   requireStripeMode,
   stripeClient,
   stripeConfigured,
 } from "@/lib/payments/stripe";
+import { explainWiseRefusal, wiseAccountFor } from "@/lib/payments/wise-receiving";
+import { generatePaymentReference } from "@/lib/payments/wise-reference";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /* ==========================================================================
    POST /api/checkout
    --------------------------------------------------------------------------
-   Turns a form post from the public checkout page into a Stripe Checkout
-   Session and redirects to it.
+   Turns a form post from the public checkout page into either a Stripe
+   Checkout Session (AUD) or a Wise bank-transfer instructions page (every
+   other currency) — see src/lib/payments/provider.ts for which.
 
    Public by design — buyers arrive from the static marketing site with no
    account, and the portal has no self-signup. That makes validation the whole
@@ -35,13 +40,13 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
      · the currency must be one of four;
      · quantity is clamped, and refused outright on SKUs that are not sold by
        the unit;
-     · the IB-only SKU cannot be bought from another sub-site.
+     · the IB-only SKU cannot be bought from another sub-site;
+     · payment plans are refused everywhere while INSTALMENTS_ENABLED is off.
 
-   The order row is written *before* the redirect. That costs a little noise —
-   an abandoned checkout leaves a `pending` row, and a bot could make some —
-   but it means the webhook has an unambiguous key to match on, and an
-   abandoned checkout is visible rather than invisible. Expired sessions clean
-   themselves up.
+   The order row is written *before* either provider is contacted. That costs
+   a little noise — an abandoned checkout leaves a `pending` row, and a bot
+   could make some — but it means a webhook has an unambiguous key to match
+   on, and an abandoned checkout is visible rather than invisible.
    ========================================================================== */
 
 export const runtime = "nodejs";
@@ -68,6 +73,9 @@ export async function POST(request: NextRequest) {
   if (!sku) return refuse("That is not something we sell.");
 
   const plan: Plan = read("plan") === "instalments" ? "instalments" : "full";
+  if (plan === "instalments" && !INSTALMENTS_ENABLED) {
+    return refuse("Payment plans aren't available right now — get in touch and we'll arrange one.");
+  }
   if (plan === "instalments" && !sku.instalments) {
     return refuse("That package is not sold on a payment plan.");
   }
@@ -103,6 +111,89 @@ export async function POST(request: NextRequest) {
   if (isDemoMode()) {
     return refuse("The portal is running in demo mode and cannot take payments.", 503);
   }
+
+  const appUrl = env.appUrl.replace(/\/$/, "");
+  const db = createSupabaseAdminClient();
+
+  if (providerFor(currency) === "wise") {
+    /* Card is not on offer for these currencies at all — refuse here, before an
+       order row exists, so an unsellable combination leaves no pending row
+       behind. */
+    if (plan === "full" && !offersPayInFull(sku)) {
+      return refuse("This programme is sold as a monthly plan.");
+    }
+
+    const account = wiseAccountFor(currency);
+    if (!account) {
+      return refuse(explainWiseRefusal(currency), 503);
+    }
+
+    /* Wise has no hosted page of its own to collect who is paying, the way
+       Stripe Checkout does — so our own form asks, and this is the only
+       moment that information is ever given. resolveStudent/resolveParent are
+       pure: computing the right values to store is not the same as granting
+       anything, which still happens only on settlement. */
+    const buyerEmail = read("buyer_email");
+    if (!looksLikeEmail(buyerEmail)) {
+      return refuse("Please enter a valid email address.");
+    }
+    const buyerName = read("buyer_name");
+
+    const student = resolveStudent({
+      buyerEmail,
+      buyerName,
+      studentEmail: read("student_email"),
+      studentName: read("student_name"),
+    });
+    const parent = resolveParent({
+      buyerEmail,
+      buyerName,
+      isGuardian: readGuardianAnswer(read("is_guardian")),
+      student,
+    });
+
+    const totalMinor = toMinorUnits(amountFor(sku, currency, "full")) * quantity;
+    const reference = await generatePaymentReference(db);
+
+    const orderFields: Record<string, unknown> = {
+      sku_slug: sku.slug,
+      sku_name: sku.name,
+      plan: "full",
+      quantity,
+      currency,
+      amount_total_minor: totalMinor,
+      grants_question_bank_days: sku.grants?.questionBankDays ?? null,
+      grants_ia_markings: sku.grants?.iaMarkings ?? null,
+      provider: "wise",
+      status: "pending",
+      payment_reference: reference,
+      buyer_email: buyerEmail,
+      buyer_name: buyerName,
+      source_site: site,
+    };
+
+    // Mirrors the Stripe webhook's own rule: only worth recording who the
+    // student is when they are provably someone other than the buyer.
+    if (student?.boughtForSomeoneElse) {
+      orderFields.student_email = student.email;
+      orderFields.buyer_is_guardian = parent !== null;
+      orderFields.note = parent
+        ? `Bought by ${buyerEmail} for ${student.email}, who they are the parent of`
+        : `Bought by ${buyerEmail} for ${student.email}`;
+    }
+
+    const { data: order, error } = await db.from("orders").insert(orderFields).select("id").single();
+    if (error || !order) {
+      console.error("[checkout] could not record the order:", error?.code);
+      return refuse("Could not start checkout. Please try again.", 500);
+    }
+
+    return NextResponse.redirect(`${appUrl}/checkout/instructions/${order.id}`, {
+      status: 303,
+      headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
+    });
+  }
+
   if (!stripeConfigured()) {
     return refuse("Payments are not configured on this deployment.", 503);
   }
@@ -131,7 +222,6 @@ export async function POST(request: NextRequest) {
   // it was sold for without a round trip, and is reconciled from the session.
   const totalMinor = toMinorUnits(amountFor(sku, currency, "full")) * quantity;
 
-  const db = createSupabaseAdminClient();
   const { data: order, error } = await db
     .from("orders")
     .insert({
@@ -160,8 +250,6 @@ export async function POST(request: NextRequest) {
     console.error("[checkout] could not record the order:", error?.code);
     return refuse("Could not start checkout. Please try again.", 500);
   }
-
-  const appUrl = env.appUrl.replace(/\/$/, "");
 
   try {
     const session = await stripeClient().checkout.sessions.create(

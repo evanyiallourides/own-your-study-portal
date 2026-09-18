@@ -142,8 +142,29 @@ export interface Order {
   studentName: string | null;
   claimedAt: string | null;
   note: string | null;
+  /** The reference a Wise buyer was asked to quote. Null for every non-Wise order. */
+  paymentReference: string | null;
   createdAt: string;
   grantsQuestionBankDays: number | null;
+}
+
+/**
+ * A Wise transfer that arrived with a reference nobody recognised.
+ *
+ * Stripe's equivalent gap can't happen — a session always carries
+ * client_reference_id — so this has no Stripe analogue: it is what a bank
+ * transfer's reference field failing to survive, or a payer mistyping it,
+ * looks like. Pre-attribution buyer data, the same reasoning that keeps
+ * `customers` administrator-only.
+ */
+export interface WiseUnmatchedTransfer {
+  id: string;
+  wiseTransferId: string;
+  amountMinor: number;
+  currency: string;
+  /** Whatever text actually arrived, verbatim — possibly empty or garbled. */
+  referenceReceived: string | null;
+  occurredAt: string;
 }
 
 /**

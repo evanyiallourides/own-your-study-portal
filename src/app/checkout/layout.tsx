@@ -20,7 +20,8 @@ export default function CheckoutLayout({ children }: { children: React.ReactNode
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">{children}</main>
       <footer className="border-t border-rule">
         <div className="mx-auto max-w-3xl px-6 py-6 text-xs text-ink-500">
-          Payments are handled by Stripe. Card details never reach this site.
+          Australian-dollar payments are handled by Stripe; card details never reach this site.
+          Other currencies are paid by direct bank transfer via Wise.
         </div>
       </footer>
     </div>

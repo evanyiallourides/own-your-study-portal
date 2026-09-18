@@ -71,6 +71,36 @@ export const env = {
   get stripePmcInstalments() {
     return read("STRIPE_PMC_INSTALMENTS");
   },
+  get wiseApiToken() {
+    return read("WISE_API_TOKEN");
+  },
+  /* Wise signs each webhook delivery with its own RSA key and sends the
+     signature in the X-Signature-SHA256 header — an asymmetric scheme, unlike
+     Stripe's shared signing secret, so what belongs here is the PUBLIC half:
+     the exact PEM Wise publishes for verifying deliveries (sandbox and live
+     keys differ). Copy it from Wise's current webhook documentation rather
+     than reusing any value written here before — Wise can rotate it. */
+  get wiseWebhookPublicKey() {
+    return read("WISE_WEBHOOK_PUBLIC_KEY");
+  },
+  get wiseSandbox() {
+    return read("WISE_SANDBOX") === "true";
+  },
+  /* The name on the receiving account, shared across every currency — a Wise
+     Business account has one legal holder regardless of how many currency
+     balances it keeps. */
+  get wiseAccountHolder() {
+    return read("WISE_ACCOUNT_HOLDER");
+  },
+  get wiseUsdAccountDetails() {
+    return read("WISE_USD_ACCOUNT_DETAILS");
+  },
+  get wiseEurAccountDetails() {
+    return read("WISE_EUR_ACCOUNT_DETAILS");
+  },
+  get wiseGbpAccountDetails() {
+    return read("WISE_GBP_ACCOUNT_DETAILS");
+  },
   get appUrl() {
     return read("NEXT_PUBLIC_APP_URL") ?? "http://localhost:3000";
   },
@@ -179,6 +209,29 @@ export function paymentsStatus(): IntegrationStatus {
       mode === "live"
         ? "Ready — LIVE mode. Charges are real."
         : "Ready — test mode. No real money moves.",
+  };
+}
+
+export function wiseStatus(): IntegrationStatus {
+  if (!env.wiseApiToken) {
+    return {
+      configured: false,
+      detail: "No WISE_API_TOKEN set. USD/EUR/GBP orders can be quoted but not taken.",
+    };
+  }
+  if (!env.wiseWebhookPublicKey) {
+    return {
+      configured: false,
+      detail:
+        "Wise API token is set, but no WISE_WEBHOOK_PUBLIC_KEY is set. " +
+        "Transfers would arrive and never be recorded, which is the worst of both.",
+    };
+  }
+  return {
+    configured: true,
+    detail: env.wiseSandbox
+      ? "Ready — sandbox mode. No real money moves."
+      : "Ready — live mode. Transfers are real.",
   };
 }
 

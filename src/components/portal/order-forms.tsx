@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/primitives";
 import { ErrorState } from "@/components/ui/states";
-import { linkOrderToStudent, unlinkOrder } from "@/lib/actions/orders";
+import { attachWiseTransfer, linkOrderToStudent, unlinkOrder } from "@/lib/actions/orders";
 
 /* ==========================================================================
    Attaching a payment to a student
@@ -107,6 +107,80 @@ export function LinkOrderForm({
         If nobody here is right, invite the buyer from the Students page — the payment attaches
         itself the first time they sign in.
       </p>
+    </form>
+  );
+}
+
+interface PendingWiseOrderOption {
+  id: string;
+  reference: string | null;
+  skuName: string;
+  buyerEmail: string;
+}
+
+/**
+ * Attaching a Wise transfer nobody's reference matched to the order it paid
+ * for. The fallback for the normal failure mode of a bank transfer — a
+ * reference mistyped or dropped somewhere along the payer's bank's own rails
+ * — so this stays a person's judgement call, the same way LinkOrderForm's
+ * suggestion is only ever a default and not an automatic match.
+ */
+export function AttachWiseTransferForm({
+  transferId,
+  referenceReceived,
+  orders,
+}: {
+  transferId: string;
+  referenceReceived: string | null;
+  orders: PendingWiseOrderOption[];
+}) {
+  const { pending, error, run } = useAction();
+
+  const suggested = referenceReceived
+    ? orders.find((o) => o.reference?.toUpperCase() === referenceReceived.trim().toUpperCase())
+    : undefined;
+  const [orderId, setOrderId] = useState(suggested?.id ?? "");
+
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!orderId) return;
+        run(() => attachWiseTransfer({ transferId, orderId }));
+      }}
+    >
+      {error ? <ErrorState title="Could not attach it" description={error} /> : null}
+
+      {suggested ? (
+        <p className="text-sm text-ink-500">
+          <span className="font-medium text-ink">{suggested.skuName}</span> for{" "}
+          {suggested.buyerEmail} carries this exact reference.
+        </p>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="sr-only" htmlFor={`order-${transferId}`}>
+          Order this transfer paid for
+        </label>
+        <select
+          id={`order-${transferId}`}
+          value={orderId}
+          onChange={(e) => setOrderId(e.target.value)}
+          className="min-w-[20rem] rounded-[8px] border border-rule bg-paper-3 px-3 py-2 text-sm text-ink"
+        >
+          <option value="">Choose an order…</option>
+          {orders.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.reference ?? "(no reference)"} · {o.skuName} · {o.buyerEmail}
+            </option>
+          ))}
+        </select>
+
+        <Button type="submit" disabled={pending || !orderId}>
+          {pending ? "Attaching…" : "Attach this transfer"}
+        </Button>
+      </div>
     </form>
   );
 }

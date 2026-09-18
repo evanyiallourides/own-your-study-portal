@@ -50,6 +50,7 @@ import type {
   Transcript,
   Tutor,
   QuestionBankAccess,
+  WiseUnmatchedTransfer,
 } from "@/lib/types";
 
 const STUDENT_VISIBLE_UNPUBLISHED: LessonStatus[] = ["scheduled", "in_progress", "cancelled"];
@@ -283,6 +284,18 @@ export class DemoRepository implements Repository {
     order.studentId = null;
     order.studentName = null;
     order.claimedAt = null;
+  }
+
+  async listUnmatchedWiseTransfers(): Promise<WiseUnmatchedTransfer[]> {
+    this.requireAdmin();
+    // The demo set is Stripe's story — nothing arrives by bank transfer here,
+    // so the honest render of this screen is an empty queue.
+    return [];
+  }
+
+  async attachWiseTransferToOrder(): Promise<void> {
+    this.requireAdmin();
+    throw new NotFoundError("That transfer no longer exists.");
   }
 
   /* ==========================================================================
