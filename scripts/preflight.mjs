@@ -237,6 +237,45 @@ if (!stripeKey) {
       );
     }
 
+    /* Money can be trapped one level deeper than "payouts are disabled": a
+       balance accrues in a currency that has no bank account attached to it,
+       so payouts keep running for every other currency and that one silently
+       piles up. Stripe converts non-primary currencies into the primary one at
+       2% unless the currency is configured for settlement, so the same check
+       answers both "is this stranded" and "am I paying 2% to repatriate it".
+
+       This deliberately does not try to list the attached bank accounts. The
+       external_accounts endpoint refuses this key — the account is controlled
+       by a platform application — so the honest signal is the one that can be
+       read: a currency holding money that has never been paid out. */
+    const byCurrency = new Map();
+    for (const row of [...(balance.body.available ?? []), ...(balance.body.pending ?? [])]) {
+      byCurrency.set(row.currency, (byCurrency.get(row.currency) ?? 0) + row.amount);
+    }
+
+    const payouts = await api("/v1/payouts?limit=100");
+    const paidOutIn = new Set((payouts.body.data ?? []).map((p) => p.currency));
+
+    for (const [currency, minor] of byCurrency) {
+      if (minor <= 0) continue;
+      const amount = `${currency.toUpperCase()} ${(minor / 100).toFixed(2)}`;
+      const primary = currency === a.default_currency;
+
+      if (paidOutIn.has(currency)) {
+        ok(`Settles ${currency.toUpperCase()}`, `${amount} held · payouts have run in this currency`);
+      } else if (primary) {
+        // The first payout simply has not happened yet; the schedule will take it.
+        ok(`Settles ${currency.toUpperCase()}`, `${amount} held · primary currency, no payout yet`);
+      } else {
+        warn(
+          `Settles ${currency.toUpperCase()}`,
+          `${amount} held and never paid out. Either attach a ${currency.toUpperCase()} bank `
+            + "account (Balances → add a settlement currency) or Stripe converts it to "
+            + `${a.default_currency.toUpperCase()} at 2%`,
+        );
+      }
+    }
+
     const tax = await api("/v1/tax/settings");
     if (tax.body?.status === "active") {
       const regs = await api("/v1/tax/registrations?status=active&limit=20");
