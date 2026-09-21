@@ -298,6 +298,22 @@ export class DemoRepository implements Repository {
     throw new NotFoundError("That transfer no longer exists.");
   }
 
+  async markWiseOrderPaid(orderId: string): Promise<void> {
+    this.requireAdmin();
+    const order = demoState.orders.find((o) => o.id === orderId);
+    if (!order) throw new NotFoundError("That order no longer exists.");
+    if (order.provider !== "wise") {
+      throw new Error("Only Wise orders are settled by hand — Stripe settles on its own.");
+    }
+    if (order.status !== "pending") {
+      throw new Error("That order is not waiting on a payment.");
+    }
+    // The demo set is Stripe's story — nothing here grants an entitlement,
+    // it only proves the button works without a real settlement to run.
+    order.status = "paid";
+    order.amountPaidMinor = order.amountTotalMinor;
+  }
+
   /* ==========================================================================
      IA review
      --------------------------------------------------------------------------

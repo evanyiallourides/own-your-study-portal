@@ -403,6 +403,33 @@ export class SupabaseRepository implements Repository {
     if (error) throw new Error(error.message);
   }
 
+  async markWiseOrderPaid(orderId: string): Promise<void> {
+    const { data: order, error } = await this.db
+      .from("orders")
+      .select("id, provider, status, amount_total_minor, currency")
+      .eq("id", orderId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!order) throw new NotFoundError("That order no longer exists.");
+    if (order.provider !== "wise") {
+      throw new Error("Only Wise orders are settled by hand — Stripe settles on its own.");
+    }
+    if (order.status !== "pending") {
+      throw new Error("That order is not waiting on a payment.");
+    }
+
+    // A stable id per order, not a fresh one per click: the pending-status
+    // check above already stops a second click from double-counting, and
+    // keeping this predictable makes it obvious in order_payments later that
+    // this settled by hand rather than through the webhook.
+    const settled = await settleWiseTransfer(this.db, orderId, {
+      transferId: `manual:${orderId}`,
+      amountMinor: order.amount_total_minor,
+      currency: order.currency,
+    });
+    if (!settled.ok) throw new Error(settled.reason);
+  }
+
   async setQuestionBankAccess(
     studentId: string,
     input: { granted: boolean; expiresAt: string | null; note: string | null },

@@ -227,6 +227,13 @@ export interface Repository {
   listUnmatchedWiseTransfers(): Promise<WiseUnmatchedTransfer[]>;
   /** Attach one to an order and settle it, exactly as the webhook would have. */
   attachWiseTransferToOrder(transferId: string, orderId: string): Promise<void>;
+  /**
+   * Settle a pending Wise order by hand — an administrator has checked Wise's
+   * own dashboard and seen the transfer land. No API token, no webhook: the
+   * fallback that works before either is ever configured, and stays useful
+   * after, for the transfer whose reference never arrived at all.
+   */
+  markWiseOrderPaid(orderId: string): Promise<void>;
 
   /* -- lessons -- */
   listLessons(filter: LessonFilter): Promise<LessonWithContext[]>;

@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { AttachWiseTransferForm, LinkOrderForm, UnlinkOrderButton } from "@/components/portal/order-forms";
+import {
+  AttachWiseTransferForm,
+  LinkOrderForm,
+  MarkWiseOrderPaidButton,
+  UnlinkOrderButton,
+} from "@/components/portal/order-forms";
 import { Badge, Card, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
@@ -87,14 +92,13 @@ export default async function AdminOrders() {
     repo.listUnmatchedWiseTransfers(),
   ]);
 
-  const pendingWiseOrders = orders
-    .filter((o) => o.provider === "wise" && o.status === "pending")
-    .map((o) => ({
-      id: o.id,
-      reference: o.paymentReference,
-      skuName: o.skuName,
-      buyerEmail: o.buyerEmail,
-    }));
+  const pendingWise = orders.filter((o) => o.provider === "wise" && o.status === "pending");
+  const pendingWiseOrders = pendingWise.map((o) => ({
+    id: o.id,
+    reference: o.paymentReference,
+    skuName: o.skuName,
+    buyerEmail: o.buyerEmail,
+  }));
 
   const unmatched = orders.filter(isUnmatched);
   const failing = orders.filter((o) => o.status === "past_due");
@@ -197,6 +201,27 @@ export default async function AdminOrders() {
           </div>
         )}
       </section>
+
+      {/* -- Wise orders waiting on a bank transfer ------------------------ */}
+      {pendingWise.length > 0 && (
+        <section className="space-y-4">
+          <SectionHead
+            title="Awaiting bank transfer"
+            description="Checkout has started; nothing has arrived yet. Check Wise's own dashboard before marking one paid."
+          />
+          <div className="space-y-4">
+            {pendingWise.map((order) => (
+              <Card key={order.id} className="space-y-4 p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <OrderLine order={order} />
+                  <Badge tone="neutral">Reference {order.paymentReference ?? "—"}</Badge>
+                </div>
+                <MarkWiseOrderPaidButton orderId={order.id} />
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* -- Wise transfers nobody's reference matched --------------------- */}
       {unmatchedTransfers.length > 0 && (

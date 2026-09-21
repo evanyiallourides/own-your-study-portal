@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/primitives";
 import { ErrorState } from "@/components/ui/states";
-import { attachWiseTransfer, linkOrderToStudent, unlinkOrder } from "@/lib/actions/orders";
+import { attachWiseTransfer, linkOrderToStudent, markWiseOrderPaid, unlinkOrder } from "@/lib/actions/orders";
 
 /* ==========================================================================
    Attaching a payment to a student
@@ -216,6 +216,49 @@ export function UnlinkOrderButton({ orderId }: { orderId: string }) {
         className="font-medium text-danger underline underline-offset-4"
       >
         {pending ? "Detaching…" : "Yes, detach"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="text-ink-500 underline underline-offset-4"
+      >
+        Cancel
+      </button>
+    </span>
+  );
+}
+
+/**
+ * Settling a Wise order by hand — the fallback that works with no API token
+ * and no webhook configured at all, and stays useful afterwards for the
+ * transfer whose reference never arrived. Confirmed in two steps, the same
+ * as detaching an order: this grants whatever the order paid for, and that
+ * is not something a stray click should do.
+ */
+export function MarkWiseOrderPaidButton({ orderId }: { orderId: string }) {
+  const { pending, error, run } = useAction();
+  const [confirming, setConfirming] = useState(false);
+
+  if (error) return <ErrorState title="Could not mark it paid" description={error} />;
+
+  if (!confirming) {
+    return (
+      <Button type="button" onClick={() => setConfirming(true)}>
+        Mark as paid
+      </Button>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2 text-sm">
+      <span className="text-ink-500">Confirmed in Wise — mark this paid?</span>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => run(() => markWiseOrderPaid({ orderId }))}
+        className="font-medium text-accent underline underline-offset-4"
+      >
+        {pending ? "Marking…" : "Yes, mark paid"}
       </button>
       <button
         type="button"

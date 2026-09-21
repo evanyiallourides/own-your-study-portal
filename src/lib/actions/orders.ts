@@ -116,3 +116,28 @@ export async function attachWiseTransfer(
     return toActionError(error);
   }
 }
+
+const markPaidSchema = z.object({ orderId: id });
+
+/**
+ * Settle a pending Wise order by hand — checked in Wise's own dashboard,
+ * confirmed there, marked here. No API token or webhook required, which
+ * makes this the thing that works before either is configured and the
+ * fallback for whatever a webhook never catches.
+ */
+export async function markWiseOrderPaid(
+  input: z.input<typeof markPaidSchema>,
+): Promise<ActionResult> {
+  await requireRole("admin");
+  const parsed = markPaidSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That was not a valid order." };
+
+  try {
+    const repo = await getRepository();
+    await repo.markWiseOrderPaid(parsed.data.orderId);
+    revalidatePath("/admin/orders");
+    return { ok: true };
+  } catch (error) {
+    return toActionError(error);
+  }
+}
