@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
 
+import {
+  FRAMEABLE_SOURCES,
+  UNFRAMEABLE_SOURCE,
+  frameAncestors,
+} from "./src/lib/payments/checkout-embed";
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   typedRoutes: false,
@@ -22,13 +28,30 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "X-Frame-Options", value: "DENY" },
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
           },
         ],
       },
+      /* Nothing may frame the portal — except checkout, which the marketing
+         site opens in a sheet so a buyer never leaves it. The two rules are
+         complements on purpose: a path gets X-Frame-Options or a
+         frame-ancestors policy, never both, because browsers disagree about
+         which wins when they conflict. See src/lib/payments/checkout-embed.ts. */
+      {
+        source: UNFRAMEABLE_SOURCE,
+        headers: [{ key: "X-Frame-Options", value: "DENY" }],
+      },
+      ...FRAMEABLE_SOURCES.map((source) => ({
+        source,
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: frameAncestors(process.env.NODE_ENV !== "production"),
+          },
+        ],
+      })),
     ];
   },
 };

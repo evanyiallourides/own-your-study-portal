@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { CheckoutShell } from "@/components/checkout/checkout-shell";
 import { stripeClient, stripeConfigured } from "@/lib/payments/stripe";
 
 /* ==========================================================================
@@ -57,57 +58,59 @@ export default async function CheckoutSuccessPage({
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="font-display text-4xl font-semibold text-ink">
-        {pending ? "Almost there" : "Thank you"}
-      </h1>
+    <CheckoutShell embed={false}>
+      <div className="space-y-6">
+        <h1 className="font-display text-4xl font-semibold text-ink">
+          {pending ? "Almost there" : "Thank you"}
+        </h1>
 
-      {pending ? (
-        <p className="max-w-prose text-ink-500">
-          Your payment provider is still settling this. Nothing more is needed from you — we will
-          email {email ? <strong className="text-ink">{email}</strong> : "you"} once it clears,
-          usually within a few minutes.
-        </p>
-      ) : (
-        <p className="max-w-prose text-ink-500">
-          {amount ? `That's ${amount} received. ` : ""}
-          {studentEmail ? (
-            <>
-              We are setting up the portal for{" "}
-              <strong className="text-ink">{studentEmail}</strong> and everything you have just
-              bought will be on it. Watch for an email &mdash; it has the link to get in.
-            </>
-          ) : (
-            <>
-              We will email {email ? <strong className="text-ink">{email}</strong> : "you"} a link
-              to the student portal, where your lessons, notes and materials live. Anything you
-              have just bought will already be there when you arrive.
-            </>
-          )}
-        </p>
-      )}
+        {pending ? (
+          <p className="max-w-prose text-ink-500">
+            Your payment provider is still settling this. Nothing more is needed from you — we will
+            email {email ? <strong className="text-ink">{email}</strong> : "you"} once it clears,
+            usually within a few minutes.
+          </p>
+        ) : (
+          <p className="max-w-prose text-ink-500">
+            {amount ? `That's ${amount} received. ` : ""}
+            {studentEmail ? (
+              <>
+                We are setting up the portal for{" "}
+                <strong className="text-ink">{studentEmail}</strong> and everything you have just
+                bought will be on it. Watch for an email &mdash; it has the link to get in.
+              </>
+            ) : (
+              <>
+                We will email {email ? <strong className="text-ink">{email}</strong> : "you"} a link
+                to the student portal, where your lessons, notes and materials live. Anything you
+                have just bought will already be there when you arrive.
+              </>
+            )}
+          </p>
+        )}
 
-      {settled && (
-        <p className="max-w-prose text-ink-500">
-          A receipt is on its way from Stripe. If there is already a portal account for{" "}
-          {studentEmail ?? email ?? "that address"}, this is on it now &mdash; just sign in.
-        </p>
-      )}
+        {settled && (
+          <p className="max-w-prose text-ink-500">
+            A receipt is on its way from Stripe. If there is already a portal account for{" "}
+            {studentEmail ?? email ?? "that address"}, this is on it now &mdash; just sign in.
+          </p>
+        )}
 
-      <div className="flex flex-wrap gap-3 pt-2">
-        <Link
-          href="/login"
-          className="rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white hover:opacity-90"
-        >
-          Go to the portal
-        </Link>
-        <a
-          href="https://ownyourstudy.com"
-          className="rounded-xl border border-rule px-5 py-3 text-sm font-semibold text-ink hover:bg-paper-2"
-        >
-          Back to the site
-        </a>
+        <div className="flex flex-wrap gap-3 pt-2">
+          <Link
+            href="/login"
+            className="rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white hover:opacity-90"
+          >
+            Go to the portal
+          </Link>
+          <a
+            href="https://ownyourstudy.com"
+            className="rounded-xl border border-rule px-5 py-3 text-sm font-semibold text-ink hover:bg-paper-2"
+          >
+            Back to the site
+          </a>
+        </div>
       </div>
-    </div>
+    </CheckoutShell>
   );
 }

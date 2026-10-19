@@ -13,6 +13,11 @@ import {
 } from "@/lib/catalogue";
 import { env, isDemoMode } from "@/lib/env";
 import { bankDebitFor, explainRefusal } from "@/lib/payments/bank-debit";
+import {
+  checkoutErrorPath,
+  instructionsPath,
+  type CheckoutErrorCode,
+} from "@/lib/payments/checkout-embed";
 import { looksLikeEmail, readGuardianAnswer, resolveParent, resolveStudent } from "@/lib/payments/enrolment";
 import { INSTALMENTS_ENABLED, providerFor } from "@/lib/payments/provider";
 import {
@@ -72,6 +77,27 @@ export async function POST(request: NextRequest) {
   const sku = skuFor(read("sku"));
   if (!sku) return refuse("That is not something we sell.");
 
+  const appUrl = env.appUrl.replace(/\/$/, "");
+
+  /* Opened in the marketing site's sheet (?embed=1 on the form), a refusal
+     must not be a bare JSON object on a blank page. Send the buyer back to the
+     form they were on, with a reason, so they can fix it and carry on. Only
+     the refusals a real buyer can reach go this way; anything that needs dev
+     tools to trigger stays JSON. */
+  const embed = read("embed") === "1";
+  const refuseBuyer = (code: CheckoutErrorCode, message: string, status = 400) =>
+    embed
+      ? NextResponse.redirect(
+          `${appUrl}${checkoutErrorPath({
+            slug: sku.slug,
+            site: read("site"),
+            currency: read("ccy"),
+            code,
+          })}`,
+          { status: 303, headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } },
+        )
+      : refuse(message, status);
+
   const plan: Plan = read("plan") === "instalments" ? "instalments" : "full";
   if (plan === "instalments" && !INSTALMENTS_ENABLED) {
     return refuse("Payment plans aren't available right now — get in touch and we'll arrange one.");
@@ -85,7 +111,7 @@ export async function POST(request: NextRequest) {
      checkbox is required in the markup; this is the half that cannot be
      removed with dev tools. */
   if (sku.grants !== null && read("waive_cooling_off") !== "yes") {
-    return refuse("Please confirm you want access straight away.");
+    return refuseBuyer("waiver", "Please confirm you want access straight away.");
   }
 
   const site = read("site");
@@ -109,10 +135,9 @@ export async function POST(request: NextRequest) {
   }
 
   if (isDemoMode()) {
-    return refuse("The portal is running in demo mode and cannot take payments.", 503);
+    return refuseBuyer("unavailable", "The portal is running in demo mode and cannot take payments.", 503);
   }
 
-  const appUrl = env.appUrl.replace(/\/$/, "");
   const db = createSupabaseAdminClient();
 
   if (providerFor(currency) === "wise") {
@@ -120,12 +145,12 @@ export async function POST(request: NextRequest) {
        order row exists, so an unsellable combination leaves no pending row
        behind. */
     if (plan === "full" && !offersPayInFull(sku)) {
-      return refuse("This programme is sold as a monthly plan.");
+      return refuseBuyer("unavailable", "This programme is sold as a monthly plan.");
     }
 
     const account = wiseAccountFor(currency);
     if (!account) {
-      return refuse(explainWiseRefusal(currency), 503);
+      return refuseBuyer("unavailable", explainWiseRefusal(currency), 503);
     }
 
     /* Wise has no hosted page of its own to collect who is paying, the way
@@ -135,7 +160,7 @@ export async function POST(request: NextRequest) {
        anything, which still happens only on settlement. */
     const buyerEmail = read("buyer_email");
     if (!looksLikeEmail(buyerEmail)) {
-      return refuse("Please enter a valid email address.");
+      return refuseBuyer("email", "Please enter a valid email address.");
     }
     const buyerName = read("buyer_name");
 
@@ -185,10 +210,10 @@ export async function POST(request: NextRequest) {
     const { data: order, error } = await db.from("orders").insert(orderFields).select("id").single();
     if (error || !order) {
       console.error("[checkout] could not record the order:", error?.code);
-      return refuse("Could not start checkout. Please try again.", 500);
+      return refuseBuyer("failed", "Could not start checkout. Please try again.", 500);
     }
 
-    return NextResponse.redirect(`${appUrl}/checkout/instructions/${order.id}`, {
+    return NextResponse.redirect(`${appUrl}${instructionsPath(order.id, embed)}`, {
       status: 303,
       headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
     });

@@ -13,7 +13,9 @@ import {
   type Currency,
   type Sku,
 } from "@/lib/catalogue";
+import { CheckoutShell } from "@/components/checkout/checkout-shell";
 import { bankDebitFor, explainRefusal } from "@/lib/payments/bank-debit";
+import { checkoutErrorMessage, isEmbed } from "@/lib/payments/checkout-embed";
 import { INSTALMENTS_ENABLED, providerFor } from "@/lib/payments/provider";
 import { explainWiseRefusal, wiseAccountFor } from "@/lib/payments/wise-receiving";
 import { isDemoMode, stripeMode } from "@/lib/env";
@@ -37,6 +39,11 @@ import { stripeConfigured } from "@/lib/payments/stripe";
 
    Payment plans are switched off everywhere for now — see
    INSTALMENTS_ENABLED in provider.ts for why and how that comes back.
+
+   Opened with ?embed=1 this is the marketing site's checkout sheet: same form,
+   no logo or footer, and a refusal comes back here with a reason instead of as
+   JSON (see checkout-embed.ts). Only the bank-transfer branch is ever shown
+   that way — Stripe's hosted page cannot be framed, so AUD leaves the sheet.
    ========================================================================== */
 
 export const dynamic = "force-dynamic";
@@ -70,10 +77,48 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
   const total = amountFor(sku, currency, "full");
   const contactHref = `https://ownyourstudy.com/${site ?? "own-your-ib"}/contact.html`;
 
-  return providerFor(currency) === "stripe" ? (
-    <StripeCheckout sku={sku} site={site} currency={currency} total={total} contactHref={contactHref} />
-  ) : (
-    <WiseCheckout sku={sku} site={site} currency={currency} total={total} contactHref={contactHref} />
+  const embed = isEmbed(query.embed);
+  const error = checkoutErrorMessage(query.error);
+
+  const stripe = providerFor(currency) === "stripe";
+  const fullPage = `/checkout/${sku.slug}?${new URLSearchParams({
+    ...(site ? { site } : {}),
+    ccy: currency,
+  }).toString()}`;
+
+  return (
+    <CheckoutShell embed={embed}>
+      {stripe && embed ? (
+        /* Not reachable from the sheet, which leaves AUD links alone — this is
+           for a link that was framed some other way. Stripe's page refuses to
+           render in a frame, so the honest thing is to leave it. */
+        <div className="space-y-4">
+          <h1 className="font-display text-2xl font-semibold text-ink">{sku.name}</h1>
+          <p className="max-w-prose text-sm text-ink-500">
+            Australian-dollar payments are completed on a secure Stripe page.
+          </p>
+          <a
+            href={fullPage}
+            target="_top"
+            className="inline-block rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white hover:opacity-90"
+          >
+            Continue to secure checkout
+          </a>
+        </div>
+      ) : stripe ? (
+        <StripeCheckout sku={sku} site={site} currency={currency} total={total} contactHref={contactHref} />
+      ) : (
+        <WiseCheckout
+          sku={sku}
+          site={site}
+          currency={currency}
+          total={total}
+          contactHref={contactHref}
+          embed={embed}
+          error={error}
+        />
+      )}
+    </CheckoutShell>
   );
 }
 
@@ -291,7 +336,15 @@ function StripeCheckout({ sku, site, currency, total, contactHref }: BranchProps
   );
 }
 
-function WiseCheckout({ sku, site, currency, total, contactHref }: BranchProps) {
+function WiseCheckout({
+  sku,
+  site,
+  currency,
+  total,
+  contactHref,
+  embed,
+  error,
+}: BranchProps & { embed: boolean; error: string | null }) {
   const account = wiseAccountFor(currency);
   const canPayInFull = !isDemoMode() && account !== null && offersPayInFull(sku);
 
@@ -299,6 +352,12 @@ function WiseCheckout({ sku, site, currency, total, contactHref }: BranchProps) 
     <div className="space-y-8">
       <Header sku={sku} />
       <PriceSummary sku={sku} total={total} currency={currency} />
+
+      {error && (
+        <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {error}
+        </p>
+      )}
 
       {!canPayInFull ? (
         <NotSellable contactHref={contactHref}>
@@ -314,6 +373,7 @@ function WiseCheckout({ sku, site, currency, total, contactHref }: BranchProps) 
           <input type="hidden" name="plan" value="full" />
           <input type="hidden" name="ccy" value={currency} />
           <input type="hidden" name="site" value={site ?? ""} />
+          {embed && <input type="hidden" name="embed" value="1" />}
           <BuyerFields />
           <SharedFormFields sku={sku} />
           <button
