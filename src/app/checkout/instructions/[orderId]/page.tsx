@@ -70,8 +70,8 @@ export default async function CheckoutInstructionsPage({
       <div className="space-y-4">
         <h1 className="font-display text-3xl font-semibold text-ink">Already received</h1>
         <p className="max-w-prose text-ink-500">
-          Your transfer for {order.sku_name} has been matched and recorded. Nothing more is needed —
-          watch for an email with your portal link.
+          Your transfer for {order.sku_name} has been matched and recorded. Nothing more is needed
+          from you — if your portal access has not appeared shortly, get in touch.
         </p>
       </div>
     );
@@ -145,8 +145,8 @@ export default async function CheckoutInstructionsPage({
       </div>
 
       <p className="max-w-prose text-sm text-ink-500">
-        Bank transfers usually arrive within one to two business days. We will email you once it is
-        matched — nothing more is needed from you until then.
+        Bank transfers usually arrive within one to two business days. Once yours arrives we will
+        match it to this order and set up your access — nothing more is needed from you until then.
       </p>
 
       <ContactLink />
