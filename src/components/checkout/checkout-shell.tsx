@@ -42,8 +42,8 @@ export function CheckoutShell({ embed, children }: { embed: boolean; children: R
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">{children}</main>
       <footer className="border-t border-rule">
         <div className="mx-auto max-w-3xl px-6 py-6 text-xs text-ink-500">
-          Australian-dollar payments are handled by Stripe; card details never reach this site.
-          Other currencies are paid by direct bank transfer via Wise.
+          Australian-dollar and euro payments are handled by Stripe; bank details never reach
+          this site. Other currencies are paid by direct bank transfer via Wise. Bitcoin, when available, opens a separate secure payment page.
         </div>
       </footer>
     </div>

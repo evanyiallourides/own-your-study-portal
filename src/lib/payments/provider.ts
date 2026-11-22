@@ -1,23 +1,24 @@
 import type { Currency } from "@/lib/catalogue";
+import { schemeFor } from "@/lib/payments/bank-debit";
 
 /* ==========================================================================
    Which provider handles which currency
    --------------------------------------------------------------------------
-   AUD keeps using Stripe: PayTo direct debit already works and Stripe Tax
-   already handles GST (see bank-debit.ts and catalogue.ts's gstComponent).
-   Every other currency moves to Wise, because Stripe has no working
-   bank-debit route for any of them — USD has none available to an
-   Australian account at all, and EUR/GBP's are still waiting on Stripe's own
-   dashboard verification.
+   Stripe takes every currency whose direct-debit scheme is switched on in
+   bank-debit.ts — PayTo for AUD, SEPA Direct Debit for EUR. Wise takes the
+   rest: USD has no direct-debit scheme open to an Australian account at all,
+   and GBP's (Bacs) is still waiting on Stripe's own dashboard verification.
 
-   One function, so the split lives in exactly one place. If AUD ever needs
-   to move to Wise too, or a currency moves the other way, this is the only
-   line that changes.
+   Derived from `activated` rather than kept as a second list, so there is one
+   switch per currency, not two that can disagree: flip a scheme on in
+   bank-debit.ts and that currency's checkout moves to Stripe with it. The
+   marketing site's checkout sheet (assets/checkout-sheet.js) keeps its own
+   copy of this list, because it is static and cannot import this file.
    ========================================================================== */
 export type PaymentProvider = "stripe" | "wise";
 
 export function providerFor(currency: Currency): PaymentProvider {
-  return currency === "aud" ? "stripe" : "wise";
+  return schemeFor(currency)?.activated ? "stripe" : "wise";
 }
 
 /**

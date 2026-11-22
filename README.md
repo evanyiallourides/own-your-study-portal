@@ -1143,3 +1143,64 @@ to be one.
   grants what a parent already gets, an administrator can see and remove every
   link, and the alternative — an identity check at a payment page — would cost
   more families than it protects. It is a deliberate position, not an oversight.
+
+## Bitcoin via BTCPay Server
+
+The checkout offers Bitcoin in addition to its existing bank payment branch.
+Until configured, the section says **Coming soon** and has no payment button.
+No public test-payment link is used for customer orders.
+
+Deployment order:
+
+1. Run `supabase/migrations/20261119100000_btcpay.sql` on the intended database.
+2. Deploy the portal code with Bitcoin disabled (the default).
+3. Set up a dedicated **mainnet** BTCPay store with an externally generated,
+   backed-up wallet. Import only public wallet data. Never put a seed or private
+   key in this app, its environment, a chat, or a shared host.
+4. Make a store-scoped API key with only **View invoices** and **Create invoice**.
+   No wallet spending, payout, refund, store modification or all-store permissions.
+5. In BTCPay, create a webhook to
+   `https://portal.ownyourstudy.com/api/webhooks/btcpay` for InvoiceSettled,
+   InvoiceExpired, InvoiceInvalid, InvoiceProcessing and InvoiceReceivedPayment.
+   Enable automatic redelivery. Enter its secret directly into Cloudflare secrets.
+6. Configure these server-only settings through the existing Cloudflare deployment
+   process: `BTCPAY_URL` (HTTPS origin, no path), `BTCPAY_STORE_ID`, `BTCPAY_API_KEY`,
+   `BTCPAY_WEBHOOK_SECRET`, `BTCPAY_NETWORK=mainnet`. None is NEXT_PUBLIC.
+   Set `BTCPAY_LIVE_ENABLED=true` only after the store's receiving address has been
+   independently verified and the owner has approved the live test.
+7. Pay one small real order yourself. Verify address, invoice amount, on-chain
+   receipt, six confirmations, signed webhook redelivery, order status and learner
+   access. Recheck expired/partial payments and invalid signatures in staging.
+   Disable `BTCPAY_LIVE_ENABLED` if any check fails. Do not advertise Bitcoin until
+   the real payment has passed. No end-to-end live payment was run during preparation.
+
+The site prices from the server-side catalogue, with the existing currency,
+quantity and digital-access consent checks. It sends only an internal order UUID
+as invoice metadata, not customer or student email addresses. Checkout is hosted
+by BTCPay, outside the marketing site's iframe. Each invoice expires after 15
+minutes, accepts on-chain Bitcoin only, allows zero underpayment tolerance and
+requires six confirmations (`LowSpeed`). Network fees remain payable by the sender.
+The actual invoice destination is checked for mainnet format before redirecting;
+setting a mainnet label on a test server is insufficient.
+
+Webhook signatures use the configured secret and the exact raw request body.
+Settlement additionally fetches the invoice from the configured store and verifies
+its invoice/order mapping, currency, price, status and additional status.
+Only `Settled` + `None`/`PaidOver` may credit an order. Partial, late, manually marked
+or invalid invoices require manual reconciliation. A browser return never marks
+an order paid. Database transactions prevent duplicate payment credits and grant
+existing student entitlements atomically. New students remain in the existing
+admin Orders queue for invitation/linking; this integration does not send invitations.
+Overpayments credit the purchase amount only and flag the excess for manual review.
+Refunds require a verified destination and an owner-approved hardware-wallet signing
+step; there is no automatic Bitcoin refund or wallet spending capability.
+
+BTCPay and the portal still need monitoring and reconciliation. A failed webhook
+returns 503 for retry; monitor delivery failures in BTCPay and pending orders in the
+portal. An invoice POST timeout may leave an unlinked invoice, so inspect the order
+UUID in BTCPay before retrying manually. Do not rotate the configured store or keys
+while pending invoices remain without retaining a reconciliation path.
+
+Tests: `npm test` includes signature/host/network/amount/status checks and real
+PostgreSQL migration, duplicate settlement and caller-permission tests. No actual
+BTCPay credentials or wallet secrets are included in the source.

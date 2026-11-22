@@ -19,6 +19,7 @@ import { checkoutErrorMessage, isEmbed } from "@/lib/payments/checkout-embed";
 import { INSTALMENTS_ENABLED, providerFor } from "@/lib/payments/provider";
 import { explainWiseRefusal, wiseAccountFor } from "@/lib/payments/wise-receiving";
 import { isDemoMode, stripeMode } from "@/lib/env";
+import { btcPayConfig } from "@/lib/payments/btcpay";
 import { stripeConfigured } from "@/lib/payments/stripe";
 
 /* ==========================================================================
@@ -29,13 +30,13 @@ import { stripeConfigured } from "@/lib/payments/stripe";
    JavaScript: a form post to a route handler that redirects is the shortest
    path that still works with a slow connection and a blocked script.
 
-   AUD keeps charging a direct debit against the buyer's own bank account —
-   PayTo — because the fee on that is capped and the fee on a card is not
-   (src/lib/payments/bank-debit.ts). Every other currency is paid by a direct
-   bank transfer via Wise instead, because there is no working direct-debit
-   scheme an Australian business can offer for USD, EUR or GBP today. Which
-   provider a currency uses is the one decision in
-   src/lib/payments/provider.ts; everything below just asks it.
+   AUD and EUR charge a direct debit against the buyer's own bank account —
+   PayTo and SEPA Direct Debit — because the fee on that is capped and the fee
+   on a card is not (src/lib/payments/bank-debit.ts). USD and GBP are paid by a
+   direct bank transfer via Wise instead, because there is no working
+   direct-debit scheme this business can offer for them today. Which provider
+   a currency uses is the one decision in src/lib/payments/provider.ts;
+   everything below just asks it.
 
    Payment plans are switched off everywhere for now — see
    INSTALMENTS_ENABLED in provider.ts for why and how that comes back.
@@ -89,13 +90,13 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
   return (
     <CheckoutShell embed={embed}>
       {stripe && embed ? (
-        /* Not reachable from the sheet, which leaves AUD links alone — this is
+        /* Not reachable from the sheet, which leaves Stripe links alone — this is
            for a link that was framed some other way. Stripe's page refuses to
            render in a frame, so the honest thing is to leave it. */
         <div className="space-y-4">
           <h1 className="font-display text-2xl font-semibold text-ink">{sku.name}</h1>
           <p className="max-w-prose text-sm text-ink-500">
-            Australian-dollar payments are completed on a secure Stripe page.
+            {currency.toUpperCase()} payments are completed on a secure Stripe page.
           </p>
           <a
             href={fullPage}
@@ -118,6 +119,7 @@ export default async function CheckoutPage({ params, searchParams }: Props) {
           error={error}
         />
       )}
+      <BitcoinCheckout sku={sku} site={site} currency={currency} total={total} contactHref={contactHref} />
     </CheckoutShell>
   );
 }
@@ -417,5 +419,35 @@ function Footer({ children, currency }: { children: React.ReactNode; currency: C
       {children} Prices shown in {currency.toUpperCase()}
       {currency === "aud" ? ", inclusive of GST" : ""}.
     </p>
+  );
+}
+
+/** Bitcoin always leaves the embedded sheet for its provider-hosted checkout. */
+function BitcoinCheckout({ sku, site, currency, total }: BranchProps) {
+  const ready = Boolean(btcPayConfig()) && !isDemoMode() && offersPayInFull(sku);
+  return (
+    <section aria-labelledby="bitcoin-title" className="mt-8 space-y-4 rounded-2xl border border-rule bg-white p-6">
+      <div className="flex items-center justify-between gap-4">
+        <h2 id="bitcoin-title" className="font-display text-xl font-semibold text-ink">Pay with Bitcoin</h2>
+        {!ready && <span className="rounded-full bg-paper px-3 py-1 text-sm text-ink-500">Coming soon</span>}
+      </div>
+      {ready ? (
+        <>
+          <p className="text-ink-500">Pay the Bitcoin equivalent of your order total. The next page shows the exact amount and a QR code. Your wallet may charge a network fee. Access is confirmed after the payment settles.</p>
+          <form method="POST" action="/api/checkout" target="_top" className="grid gap-4 sm:grid-cols-2">
+            <input type="hidden" name="method" value="bitcoin" />
+            <input type="hidden" name="sku" value={sku.slug} />
+            <input type="hidden" name="plan" value="full" />
+            <input type="hidden" name="ccy" value={currency} />
+            <input type="hidden" name="site" value={site ?? ""} />
+            <BuyerFields />
+            <SharedFormFields sku={sku} />
+            <button type="submit" className="sm:col-span-2 rounded-xl bg-accent px-5 py-4 text-left font-semibold text-white hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+              Continue with Bitcoin — {formatMoney(total, currency)}
+            </button>
+          </form>
+        </>
+      ) : <p className="text-ink-500">Bitcoin payments are not available yet. Please use the payment option above or contact us.</p>}
+    </section>
   );
 }

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { CATALOGUE, CURRENCIES, amountFor, offersPayInFull, skuFor } from "@/lib/catalogue";
 import { bankDebitFor, explainRefusal, schemeFor } from "@/lib/payments/bank-debit";
+import { providerFor } from "@/lib/payments/provider";
 
 describe("bank debit availability", () => {
   it("has no scheme for USD, because Australia cannot accept ACH", () => {
@@ -21,6 +22,23 @@ describe("bank debit availability", () => {
       assert.equal(r.ok, false, `${ccy} is not activated, so it must refuse`);
       assert.equal(r.ok === false && r.reason, "not_activated");
     }
+  });
+
+  it("takes EUR through SEPA Direct Debit today", () => {
+    const r = bankDebitFor("eur", 183);
+    assert.equal(r.ok, true);
+    assert.equal(r.ok === true && r.scheme.method, "sepa_debit");
+  });
+
+  it("sends exactly the activated currencies to Stripe, and the rest to Wise", () => {
+    for (const ccy of CURRENCIES) {
+      const expected = schemeFor(ccy)?.activated ? "stripe" : "wise";
+      assert.equal(providerFor(ccy), expected, `${ccy} is routed to the wrong provider`);
+    }
+    assert.equal(providerFor("aud"), "stripe");
+    assert.equal(providerFor("eur"), "stripe");
+    assert.equal(providerFor("gbp"), "wise");
+    assert.equal(providerFor("usd"), "wise");
   });
 
   it("takes AUD through PayTo today", () => {

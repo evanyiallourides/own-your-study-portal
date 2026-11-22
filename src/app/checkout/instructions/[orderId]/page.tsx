@@ -6,7 +6,9 @@ import { CopyField } from "@/components/checkout/copy-field";
 import { EmbedCloseButton, EmbedSignal } from "@/components/checkout/embed-bridge";
 import { StatusWatcher } from "@/components/checkout/status-watcher";
 import { formatMoney, isCurrency } from "@/lib/catalogue";
+import { emailConfigured } from "@/lib/email/send";
 import { isEmbed } from "@/lib/payments/checkout-embed";
+import { splitDetailLine } from "@/lib/payments/detail-line";
 import { wiseAccountFor } from "@/lib/payments/wise-receiving";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -49,16 +51,6 @@ interface OrderRow {
 
 const SETTLED = new Set(["paid", "instalments_active", "completed"]);
 const DEAD = new Set(["refunded", "cancelled"]);
-
-/** "IBAN: BE12 3456" -> { label: "IBAN", value: "BE12 3456" }. A line with no label stays whole. */
-function splitDetail(line: string): { label: string; value: string } {
-  const at = line.indexOf(":");
-  if (at > 0 && at <= 40) {
-    const value = line.slice(at + 1).trim();
-    if (value) return { label: line.slice(0, at).trim(), value };
-  }
-  return { label: "Detail", value: line.trim() };
-}
 
 export default async function CheckoutInstructionsPage({
   params,
@@ -159,7 +151,7 @@ export default async function CheckoutInstructionsPage({
             <>
               <CopyField label="Account holder" value={account.accountHolder} />
               {account.details.map((line, i) => {
-                const { label, value } = splitDetail(line);
+                const { label, value } = splitDetailLine(line);
                 return <CopyField key={i} label={label} value={value} />;
               })}
             </>
@@ -185,7 +177,10 @@ export default async function CheckoutInstructionsPage({
           <p>
             Waiting for your transfer. This page updates by itself when it arrives. Transfers
             usually take one to two business days, and your access is set up once yours is matched
-            &mdash; so make a note of the reference above before you close this.
+            &mdash;{" "}
+            {emailConfigured()
+              ? "we will email a copy of these details to the address you gave, and a receipt once your transfer is matched."
+              : "so make a note of the reference above before you close this."}
           </p>
         </div>
 

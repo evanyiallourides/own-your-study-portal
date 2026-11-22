@@ -27,9 +27,9 @@
    and this seller is Australian:
 
      AUD  PayTo                 live
-     EUR  SEPA Direct Debit     Australian businesses are eligible; must be
-                                requested in the Dashboard and identity-verified
-     GBP  Bacs Direct Debit     same
+     EUR  SEPA Direct Debit     live (Australian businesses are eligible; it is
+                                requested in the Dashboard and identity-verified)
+     GBP  Bacs Direct Debit     eligible, not yet requested
      USD  ACH Direct Debit      NOT open to Australian businesses. Stripe's
                                 eligibility list is US, Canada in preview, and
                                 Europe. There is no route to it short of a US
@@ -40,7 +40,9 @@
    call: the checkout page renders on every visit and must not depend on an API
    round trip to decide whether to show a button. Flipping one of these to true
    before the Dashboard agrees produces a session Stripe refuses, which the
-   checkout route already catches and reports.
+   checkout route already catches and reports. It also decides the provider:
+   an activated currency is sold through Stripe, the rest through Wise (see
+   provider.ts).
    ========================================================================== */
 
 import type { Currency } from "@/lib/catalogue";
@@ -61,7 +63,7 @@ export interface BankDebit {
 
 const BY_CURRENCY: Record<Currency, BankDebit | null> = {
   aud: { method: "payto", label: "PayTo", limit: 10_000, activated: true },
-  eur: { method: "sepa_debit", label: "SEPA Direct Debit", limit: 10_000, activated: false },
+  eur: { method: "sepa_debit", label: "SEPA Direct Debit", limit: 10_000, activated: true },
   gbp: { method: "bacs_debit", label: "Bacs Direct Debit", limit: 10_000, activated: false },
   usd: null,
 };

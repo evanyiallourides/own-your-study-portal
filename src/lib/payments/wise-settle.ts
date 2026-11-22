@@ -2,6 +2,9 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+
+import { sendPaymentReceipt, shouldSendReceipt } from "@/lib/email/order-emails";
+import { env } from "@/lib/env";
 import { claimOrderForBuyer, notifyAdmins, revokeOrderEntitlement } from "@/lib/payments/entitlements";
 import { enrolPaidBuyer, enrolPaidParent, resolveParent, resolveStudent } from "@/lib/payments/enrolment";
 import { planFor, type OrderState, type PaymentSignal } from "@/lib/payments/events";
@@ -44,7 +47,7 @@ export async function settleWiseTransfer(
   const { data: row } = await db
     .from("orders")
     .select(
-      "id, plan, status, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, buyer_name, buyer_is_guardian, student_email, sku_name",
+      "id, plan, status, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, buyer_name, buyer_is_guardian, student_email, sku_name, currency, quantity, payment_reference",
     )
     .eq("id", orderId)
     .eq("provider", "wise")
@@ -161,6 +164,29 @@ export async function settleWiseTransfer(
         }
       }
     }
+  }
+
+  /* The receipt. Keyed on the status the order had before this call, not the
+     one it has now: that is what separates a first payment from a webhook
+     delivered twice or a button pressed twice, neither of which should put a
+     second receipt in anybody's inbox. Stripe orders never come through here —
+     Stripe sends its own. Awaited, because this runs in an admin action or a
+     webhook rather than in front of a buyer, and sendPaymentReceipt cannot
+     throw. */
+  if (shouldSendReceipt(row.status, settles) && row.buyer_email) {
+    await sendPaymentReceipt({
+      orderId,
+      buyerEmail: row.buyer_email,
+      buyerName: row.buyer_name,
+      skuName: row.sku_name,
+      quantity: row.quantity ?? 1,
+      amountMinor: row.amount_total_minor,
+      currency: row.currency,
+      reference: row.payment_reference ?? null,
+      questionBankDays: row.grants_question_bank_days ?? null,
+      iaMarkings: row.grants_ia_markings ?? null,
+      portalUrl: `${env.appUrl.replace(/\/$/, "")}/login`,
+    });
   }
 
   if (plan.entitlement === "revoke") {

@@ -381,12 +381,12 @@ what the review contains rather than how close it gets.
 
 ### Payments (Wise)
 
-AUD sales run on Stripe as above and need nothing here. Every other
-currency (USD, EUR, GBP) is paid by direct bank transfer via Wise instead —
-see `src/lib/payments/provider.ts` for why.
+AUD (PayTo) and EUR (SEPA Direct Debit) sales run on Stripe as above and
+need nothing here. USD and GBP are paid by direct bank transfer via Wise
+instead — see `src/lib/payments/provider.ts` for why.
 
-1. A Wise Business account with local receiving details for USD, EUR and
-   GBP. Run `./tools/set-wise-key.sh` for the API token — it keeps the token
+1. A Wise Business account with local receiving details for USD and GBP
+   (EUR details are no longer shown to buyers while SEPA is switched on). Run `./tools/set-wise-key.sh` for the API token — it keeps the token
    out of your shell history the same way `set-stripe-key.sh` does for
    Stripe's. Everything else below is real business/financial data rather
    than a secret, so it goes straight into your env, but keep it out of chat
@@ -423,6 +423,46 @@ Instalment/payment-plan billing is switched off for every currency right
 now, not only for Wise — `INSTALMENTS_ENABLED` in `provider.ts` is the one
 place that decides, and the checkout route refuses `plan=instalments`
 uniformly while it is `false`.
+
+### Transactional email (bank-transfer details and receipts)
+
+A bank-transfer buyer gets two emails, both sent through Resend's HTTP API
+from `src/lib/email/`:
+
+- **Transfer details** — straight after checkout creates the order: amount,
+  reference, bank details and a link back to the live payment page. So a buyer
+  who closes the checkout sheet still has the reference. At most three per
+  address per hour (the checkout form is public).
+- **Receipt** — once, when a Wise order goes from pending to paid, by any route
+  (Mark as paid, attach transfer, or the webhook). Names the seller and ABN.
+
+Stripe (AUD) orders send neither: Stripe sends its own receipt.
+
+This is separate from the Supabase auth mail (invitations, sign-in links),
+which goes out through Resend's **SMTP** and is configured in Supabase, not
+here. The sending domain is the same, and already verified (section 3).
+
+1. Resend → **API keys → Create**, permission **Sending access**. Name it
+   something like `portal-receipts`. Use a key of its own rather than the one
+   Supabase's SMTP uses, so either can be revoked without breaking the other.
+2. **Vercel → Settings → Environment Variables** → add `RESEND_API_KEY`
+   (Production), paste the key, save, then **redeploy**. A variable change only
+   reaches new deployments.
+3. For running the portal locally, `./tools/set-resend-key.sh` puts it in
+   `portal/.env.local` without it appearing on screen or in shell history.
+4. `EMAIL_FROM` (default `Own Your Study <no-reply@ownyourstudy.com>`) must be
+   on the verified domain. `EMAIL_REPLY_TO` (default `hello@ownyourstudy.com`)
+   is where a customer's reply goes — make sure that mailbox is read.
+
+With no key set nothing is sent and nothing breaks: checkout and settlement
+carry on, and the payment page reverts to telling the buyer to note their
+reference rather than promising an email.
+
+**Checkpoint.** After the first real order, **resend.com/emails** should show
+the details email as *Delivered*, and the receipt after you press Mark as paid.
+A failed send never fails the order — it is logged as `[email] … not sent for
+order <id>` in Vercel's function logs (never with the address) and is visible
+in Resend's own dashboard.
 
 ---
 

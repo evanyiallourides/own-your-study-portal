@@ -895,3 +895,37 @@ describe("IA review credits", () => {
     );
   });
 });
+
+// Uses the real schema and PostgreSQL transaction logic, not a mock of settlement.
+describe("BTCPay settlement", () => {
+  async function btcOrder(invoice: string) {
+    const result = await db.query<{id: string}>(`insert into public.orders
+      (provider,provider_checkout_id,sku_slug,sku_name,plan,currency,amount_total_minor,buyer_email)
+      values ('btcpay',$1,'test-bitcoin','Test Bitcoin','full','eur',500000,'btc-buyer@example.com') returning id`, [invoice]);
+    return result.rows[0]!.id;
+  }
+  it("records a duplicate delivery only once", async () => {
+    const id = await btcOrder("btc-test-one");
+    const sql = `select public.settle_btcpay_order($1,'btc-test-one',500000,'eur','None')`;
+    await db.query(sql, [id]); await db.query(sql, [id]);
+    const result = await db.query<{status: string, amount_paid_minor: number}>("select status,amount_paid_minor from public.orders where id=$1", [id]);
+    assert.equal(result.rows[0]!.status, "paid"); assert.equal(result.rows[0]!.amount_paid_minor, 500000);
+    const payments = await db.query<{n: number}>("select count(*)::int n from public.order_payments where order_id=$1", [id]);
+    assert.equal(payments.rows[0]!.n, 1);
+  });
+  it("rejects mismatched amounts, currencies, invoices and manual settlement", async () => {
+    const id = await btcOrder("btc-test-two");
+    for (const [invoice, amount, currency, extra] of [["other",500000,"eur","None"],
+      ["btc-test-two",100,"eur","None"], ["btc-test-two",500000,"usd","None"],
+      ["btc-test-two",500000,"eur","Marked"], ["btc-test-two",500000,"eur",null]]) {
+      await assert.rejects(db.query("select public.settle_btcpay_order($1,$2,$3,$4,$5)", [id,invoice,amount,currency,extra]));
+    }
+    const result = await db.query<{status: string}>("select status from public.orders where id=$1", [id]);
+    assert.equal(result.rows[0]!.status, "pending");
+  });
+  it("refuses public callers", async () => {
+    const result = await db.query<{allowed:boolean}>(`select has_function_privilege('anon',
+      'public.settle_btcpay_order(uuid,text,integer,text,text)','EXECUTE') allowed`);
+    assert.equal(result.rows[0]!.allowed, false);
+  });
+});

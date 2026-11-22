@@ -101,6 +101,19 @@ export const env = {
   get wiseGbpAccountDetails() {
     return read("WISE_GBP_ACCOUNT_DETAILS");
   },
+  /* Transactional email — bank-transfer details and receipts. Distinct from
+     the Supabase auth mail, which goes out through Resend's SMTP and is
+     configured in Supabase, not here. Unset, nothing is sent and nothing
+     breaks: see src/lib/email/send.ts. */
+  get resendApiKey() {
+    return read("RESEND_API_KEY");
+  },
+  get emailFrom() {
+    return read("EMAIL_FROM") ?? "Own Your Study <no-reply@ownyourstudy.com>";
+  },
+  get emailReplyTo() {
+    return read("EMAIL_REPLY_TO") ?? "hello@ownyourstudy.com";
+  },
   get appUrl() {
     return read("NEXT_PUBLIC_APP_URL") ?? "http://localhost:3000";
   },

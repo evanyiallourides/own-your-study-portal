@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 
 import {
   amountFor,
@@ -11,6 +11,8 @@ import {
   type Currency,
   type Plan,
 } from "@/lib/catalogue";
+import { btcPayConfig, btcPayFetch, safeCheckoutLink, fiatMinor, hasMainnetBitcoinDestination, type BtcPayInvoice } from "@/lib/payments/btcpay";
+import { sendTransferDetails } from "@/lib/email/order-emails";
 import { env, isDemoMode } from "@/lib/env";
 import { bankDebitFor, explainRefusal } from "@/lib/payments/bank-debit";
 import {
@@ -138,6 +140,59 @@ export async function POST(request: NextRequest) {
     return refuseBuyer("unavailable", "The portal is running in demo mode and cannot take payments.", 503);
   }
 
+  if (read("method") === "bitcoin") {
+    const config = btcPayConfig();
+    if (!config) return refuseBuyer("unavailable", "Bitcoin payments are not available yet.", 503);
+    if (plan !== "full" || !offersPayInFull(sku)) return refuse("Bitcoin requires a one-time purchase.");
+    const buyerEmail = read("buyer_email");
+    if (!looksLikeEmail(buyerEmail)) return refuseBuyer("email", "Please enter a valid email address.");
+    const buyerName = read("buyer_name");
+    const student = resolveStudent({ buyerEmail, buyerName,
+      studentEmail: read("student_email"), studentName: read("student_name") });
+    const parent = resolveParent({ buyerEmail, buyerName,
+      isGuardian: readGuardianAnswer(read("is_guardian")), student });
+    const totalMinor = toMinorUnits(amountFor(sku, currency, "full")) * quantity;
+    const db = createSupabaseAdminClient();
+    const { data: order, error } = await db.from("orders").insert({
+      provider: "btcpay", status: "pending", sku_slug: sku.slug, sku_name: sku.name,
+      plan: "full", quantity, currency, amount_total_minor: totalMinor,
+      grants_question_bank_days: sku.grants?.questionBankDays ?? null,
+      grants_ia_markings: sku.grants?.iaMarkings ?? null,
+      buyer_email: buyerEmail, buyer_name: buyerName, source_site: site,
+      student_email: student?.boughtForSomeoneElse ? student.email : null,
+      buyer_is_guardian: parent !== null,
+    }).select("id").single();
+    if (error || !order) return refuseBuyer("failed", "Could not start checkout.", 500);
+    try {
+      const invoice = await btcPayFetch<BtcPayInvoice>(config, "/invoices", {
+        method: "POST", body: JSON.stringify({
+          amount: (totalMinor / 100).toFixed(2), currency: currency.toUpperCase(),
+          metadata: { orderId: order.id },
+          checkout: { paymentMethods: ["BTC-CHAIN"], speedPolicy: "LowSpeed", paymentTolerance: 0,
+            expirationMinutes: 15, redirectAutomatically: false, requiresRefundEmail: false,
+            redirectURL: `${appUrl}/checkout/bitcoin/${order.id}` },
+        }),
+      });
+      const methods = await btcPayFetch<unknown>(config, `/invoices/${encodeURIComponent(invoice.id)}/payment-methods`);
+      if (!hasMainnetBitcoinDestination(methods)) throw new Error("No mainnet Bitcoin destination");
+      const link = safeCheckoutLink(invoice.checkoutLink, config);
+      if (!link || !invoice.id || fiatMinor(invoice.amount) !== totalMinor ||
+          invoice.currency?.toLowerCase() !== currency || invoice.metadata?.orderId !== order.id) {
+        throw new Error("Invalid invoice response");
+      }
+      const { error: mappingError } = await db.from("orders").update({
+        provider_checkout_id: invoice.id, btcpay_status: invoice.status,
+        btcpay_additional_status: invoice.additionalStatus,
+      }).eq("id", order.id).eq("provider", "btcpay");
+      if (mappingError) throw new Error("Could not save invoice mapping");
+      return NextResponse.redirect(link, { status: 303, headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+    } catch {
+      // A network timeout may still have created an invoice. Do not fabricate success or retry a POST.
+      console.error("[btcpay] could not create or map an invoice; review pending orders");
+      return refuseBuyer("failed", "We could not open Bitcoin checkout. No payment has been confirmed. Please try again or contact us.", 503);
+    }
+  }
+
   const db = createSupabaseAdminClient();
 
   if (providerFor(currency) === "wise") {
@@ -212,6 +267,24 @@ export async function POST(request: NextRequest) {
       console.error("[checkout] could not record the order:", error?.code);
       return refuseBuyer("failed", "Could not start checkout. Please try again.", 500);
     }
+
+    /* The details, by email, so a buyer who closes the sheet still has the
+       reference. After the response: the redirect must not wait on a mail
+       server, and a send that fails must not undo an order that has been made. */
+    after(() =>
+      sendTransferDetails({
+        db,
+        orderId: order.id,
+        buyerEmail,
+        buyerName,
+        skuName: sku.name,
+        amountTotalMinor: totalMinor,
+        currency,
+        reference,
+        account,
+        appUrl,
+      }),
+    );
 
     return NextResponse.redirect(`${appUrl}${instructionsPath(order.id, embed)}`, {
       status: 303,
