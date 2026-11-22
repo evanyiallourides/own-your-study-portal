@@ -178,3 +178,14 @@
   border: 3px solid var(--color-paper);
 }
 .scroll-quiet::-webkit-scrollbar-thumb:hover { background: var(--color-ink-300); }
+
+/* Printing a summary document: the app chrome is hidden in the shell with
+   print:hidden; this flattens what is left to ink on white and keeps a
+   section from splitting across a page break where it can be helped. */
+@media print {
+  @page { margin: 16mm 14mm; }
+  html, body { background: #fff !important; }
+  .card { box-shadow: none !important; border-color: #d4d4d4 !important; break-inside: avoid; }
+  .print-avoid-break { break-inside: avoid; }
+  a { text-decoration: none !important; }
+}

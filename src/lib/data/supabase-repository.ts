@@ -22,6 +22,8 @@ import {
   type LessonMeetingInput,
   type LessonNotesPatch,
   type CreateIaSubmissionInput,
+  type ClassBoardInput,
+  type StudyPlanInput,
   type Repository,
   type SubjectInput,
   type UpdateLessonInput,
@@ -70,6 +72,10 @@ import type {
   IaSubmission,
   IaSubmissionWithReviews,
   WiseUnmatchedTransfer,
+  TutoringHourEntry,
+  TutoringHours,
+  ClassBoard,
+  StudyPlan,
 } from "@/lib/types";
 import type { IaReview } from "@/lib/ia/schema";
 import { settleWiseTransfer } from "@/lib/payments/wise-settle";
@@ -509,6 +515,132 @@ export class SupabaseRepository implements Repository {
     });
     if (error) fail("Could not spend an IA review credit", error);
     return (data as number | null) ?? 0;
+  }
+
+  /* ==========================================================================
+     Tutoring hours, class boards, study plans
+     --------------------------------------------------------------------------
+     Each read tolerates a database that has not run the migration yet — the
+     dashboard should still render, with nothing in these sections, rather
+     than fail because one table is missing.
+     ========================================================================== */
+
+  async getTutoringHours(studentId: string): Promise<TutoringHours> {
+    const [entries, minutes] = await Promise.all([
+      this.db
+        .from("tutoring_hour_entries")
+        .select("id, minutes, reason, note, created_at")
+        .eq("student_id", studentId)
+        .order("created_at", { ascending: false })
+        .limit(100),
+      this.db.rpc("student_lesson_minutes", { p_student_id: studentId }),
+    ]);
+
+    const ledger: TutoringHourEntry[] = entries.error
+      ? []
+      : (entries.data ?? []).map((row: Record<string, unknown>) => ({
+          id: row.id as string,
+          minutes: row.minutes as number,
+          reason: row.reason as TutoringHourEntry["reason"],
+          note: (row.note as string | null) ?? null,
+          createdAt: row.created_at as string,
+        }));
+
+    const usage = (Array.isArray(minutes.data) ? minutes.data[0] : minutes.data) as
+      | { used_minutes?: number; booked_minutes?: number }
+      | null;
+    const purchasedMinutes = ledger.reduce((total, e) => total + e.minutes, 0);
+    const usedMinutes = usage?.used_minutes ?? 0;
+    const bookedMinutes = usage?.booked_minutes ?? 0;
+
+    return {
+      purchasedMinutes,
+      usedMinutes,
+      bookedMinutes,
+      remainingMinutes: purchasedMinutes - usedMinutes - bookedMinutes,
+      entries: ledger,
+    };
+  }
+
+  async adjustTutoringHours(studentId: string, minutes: number, note: string): Promise<void> {
+    if (minutes === 0) return;
+    const { error } = await this.db.from("tutoring_hour_entries").insert({
+      student_id: studentId,
+      minutes,
+      reason: minutes > 0 ? "admin_grant" : "correction",
+      note,
+      created_by: this.session.profile.id,
+    });
+    if (error) fail("Could not change tutoring hours", error);
+  }
+
+  async listClassBoards(studentId: string): Promise<ClassBoard[]> {
+    const { data, error } = await this.db
+      .from("class_boards")
+      .select("id, student_id, subject_id, label, url, created_at, subject:subjects(name, level, curriculum)")
+      .eq("student_id", studentId)
+      .order("created_at", { ascending: true });
+    if (error) return [];
+    return (data ?? []).map((row: Record<string, unknown>) => {
+      const subject = row.subject ? mapSubject(row.subject) : null;
+      return {
+        id: row.id as string,
+        studentId: row.student_id as string,
+        subjectId: (row.subject_id as string | null) ?? null,
+        subjectName: subject?.name ? subject.displayName : null,
+        label: row.label as string,
+        url: row.url as string,
+        createdAt: row.created_at as string,
+      };
+    });
+  }
+
+  async addClassBoard(input: ClassBoardInput): Promise<void> {
+    const { error } = await this.db.from("class_boards").insert({
+      student_id: input.studentId,
+      subject_id: input.subjectId,
+      label: input.label,
+      url: input.url,
+      created_by: this.session.profile.id,
+    });
+    if (error) fail("Could not add the board", error);
+  }
+
+  async removeClassBoard(boardId: string): Promise<void> {
+    const { error } = await this.db.from("class_boards").delete().eq("id", boardId);
+    if (error) fail("Could not remove the board", error);
+  }
+
+  async getStudyPlan(studentId: string): Promise<StudyPlan | null> {
+    const { data, error } = await this.db
+      .from("study_plans")
+      .select("student_id, review, goals, focus_areas, next_review_on, updated_at")
+      .eq("student_id", studentId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return {
+      studentId: data.student_id as string,
+      review: (data.review as string | null) ?? null,
+      goals: (data.goals as string[] | null) ?? [],
+      focusAreas: (data.focus_areas as string[] | null) ?? [],
+      nextReviewOn: (data.next_review_on as string | null) ?? null,
+      updatedAt: data.updated_at as string,
+    };
+  }
+
+  async saveStudyPlan(studentId: string, input: StudyPlanInput): Promise<void> {
+    const { error } = await this.db.from("study_plans").upsert(
+      {
+        student_id: studentId,
+        review: input.review,
+        goals: input.goals,
+        focus_areas: input.focusAreas,
+        next_review_on: input.nextReviewOn,
+        updated_by: this.session.profile.id,
+      },
+      { onConflict: "student_id" },
+    );
+    if (error) fail("Could not save the study plan", error);
   }
 
   async listIaSubmissions(

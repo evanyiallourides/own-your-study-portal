@@ -76,6 +76,11 @@ export async function revokeOrderEntitlement(db: Db, orderId: string): Promise<v
      student has already read" is stated once. Ignored on failure: a database
      that has not run the IA migration yet must not fail a refund. */
   await db.rpc("revoke_ia_credits_for_order", { p_order_id: orderId });
+
+  /* Tutoring hours likewise: only the ones not yet booked come back, so a
+     refund after the lessons were taught leaves no debt. Same tolerance of a
+     database that has not run the migration. */
+  await db.rpc("revoke_tutoring_hours_for_order", { p_order_id: orderId });
 }
 
 /** Tell every administrator something needs a human. */

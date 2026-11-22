@@ -96,6 +96,8 @@ export interface OrderState {
   grantsQuestionBankDays: number | null;
   /** IA review credits, per unit of quantity. */
   grantsIaMarkings: number | null;
+  /** Tutoring hours, per unit of quantity. Optional so older callers default to none. */
+  grantsTutoringHours?: number | null;
 }
 
 /**
@@ -108,7 +110,11 @@ export interface OrderState {
  * A third grant should change this function and nothing else.
  */
 function grantsSomething(order: OrderState): boolean {
-  return order.grantsQuestionBankDays !== null || order.grantsIaMarkings !== null;
+  return (
+    order.grantsQuestionBankDays !== null ||
+    order.grantsIaMarkings !== null ||
+    (order.grantsTutoringHours ?? null) !== null
+  );
 }
 
 export interface PaymentRow {

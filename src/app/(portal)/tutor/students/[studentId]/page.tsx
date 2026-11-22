@@ -4,6 +4,12 @@ import { notFound } from "next/navigation";
 import { HomeworkList } from "@/components/portal/homework-list";
 import { IaStudentPanel } from "@/components/portal/ia-student-panel";
 import { LessonCard, NextLessonCard } from "@/components/portal/lesson-cards";
+import { ClassBoardList, HoursSummary } from "@/components/portal/student-records";
+import {
+  ClassBoardForm,
+  RemoveBoardButton,
+  StudyPlanForm,
+} from "@/components/portal/student-records-forms";
 import { ChevronLeftIcon } from "@/components/ui/icons";
 import { Avatar, Badge, Card, NoteList, Rule, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
@@ -37,7 +43,7 @@ export default async function TutorStudentPage({
   if (!student) notFound();
 
   const now = new Date().toISOString();
-  const [subjects, past, upcoming, homework, progress, iaSubmissions] = await Promise.all([
+  const [subjects, past, upcoming, homework, progress, iaSubmissions, plan, boards, hours] = await Promise.all([
     repo.listStudentSubjects(studentId),
     repo.listLessons({ tutorId, studentId, to: now, order: "desc" }),
     repo.listLessons({ tutorId, studentId, status: "scheduled", from: now, order: "asc" }),
@@ -46,6 +52,9 @@ export default async function TutorStudentPage({
     /* Swallowed rather than fatal: a portal whose IA migration has not been
        applied yet should still show a tutor their student's lessons. */
     repo.listIaSubmissions({ studentId }).catch(() => []),
+    repo.getStudyPlan(studentId).catch(() => null),
+    repo.listClassBoards(studentId).catch(() => []),
+    repo.getTutoringHours(studentId).catch(() => null),
   ]);
 
   const publishedRecent = past.filter((l) => l.published).slice(0, 8);
@@ -132,6 +141,40 @@ export default async function TutorStudentPage({
             </ul>
           )}
         </Card>
+      </div>
+
+      <section>
+        <SectionHead
+          title="Study plan"
+          description="Your overall review of where this student stands and the plan ahead. The student and their parents see it on their dashboard, and can print it with their recent lesson reviews."
+        />
+        <Card>
+          <StudyPlanForm studentId={studentId} plan={plan} />
+        </Card>
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-5">
+        <section className="lg:col-span-3">
+          <SectionHead
+            title="Class boards"
+            description="The whiteboards you share with this student. They open from the student's dashboard."
+          />
+          <Card className="space-y-6">
+            <ClassBoardList
+              boards={boards}
+              renderAction={(board) => <RemoveBoardButton boardId={board.id} studentId={studentId} />}
+            />
+            <Rule />
+            <ClassBoardForm studentId={studentId} subjects={subjects} />
+          </Card>
+        </section>
+
+        <section className="lg:col-span-2">
+          <SectionHead title="Tutoring hours" description="What is left to schedule against." />
+          <Card>
+            {hours ? <HoursSummary hours={hours} compact /> : <p className="text-sm text-ink-500">Not available.</p>}
+          </Card>
+        </section>
       </div>
 
       {latestNotes ? (

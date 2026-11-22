@@ -64,7 +64,7 @@ export default async function StudentLessonLayout({
       <div>
         <Link
           href="/student/lessons"
-          className="inline-flex items-center gap-1 text-sm font-medium text-ink-500 transition-colors hover:text-accent"
+          className="print:hidden inline-flex items-center gap-1 text-sm font-medium text-ink-500 transition-colors hover:text-accent"
         >
           <ChevronLeftIcon className="h-4 w-4" />
           All lessons
@@ -83,14 +83,18 @@ export default async function StudentLessonLayout({
             <p className="text-sm text-ink-500">{lesson.tutor.profile.fullName}</p>
           </div>
 
-          <JoinLessonButton {...joinButtonProps(lesson)} />
+          <div className="print:hidden">
+            <JoinLessonButton {...joinButtonProps(lesson)} />
+          </div>
         </header>
 
-        <AIProcessingStatus status={lesson.status} audience="student" className="mt-5" />
+        <AIProcessingStatus status={lesson.status} audience="student" className="mt-5 print:hidden" />
       </div>
 
       <Rule />
-      <Tabs tabs={tabs} ariaLabel="Lesson sections" />
+      <div className="print:hidden">
+        <Tabs tabs={tabs} ariaLabel="Lesson sections" />
+      </div>
       <div className="pt-2">{children}</div>
     </div>
   );

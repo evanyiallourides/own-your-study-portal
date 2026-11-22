@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { skuFor } from "@/lib/catalogue";
 
 import { sendPaymentReceipt, shouldSendReceipt } from "@/lib/email/order-emails";
 import { env } from "@/lib/env";
@@ -47,7 +48,7 @@ export async function settleWiseTransfer(
   const { data: row } = await db
     .from("orders")
     .select(
-      "id, plan, status, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, buyer_name, buyer_is_guardian, student_email, sku_name, currency, quantity, payment_reference",
+      "id, plan, status, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, buyer_name, buyer_is_guardian, student_email, sku_name, sku_slug, currency, quantity, payment_reference",
     )
     .eq("id", orderId)
     .eq("provider", "wise")
@@ -65,6 +66,8 @@ export async function settleWiseTransfer(
     amountPaidMinor: row.amount_paid_minor,
     grantsQuestionBankDays: row.grants_question_bank_days,
     grantsIaMarkings: row.grants_ia_markings ?? null,
+    // From the catalogue, for the reason given in the Stripe webhook.
+    grantsTutoringHours: skuFor(row.sku_slug)?.hours ?? null,
   };
 
   const signal: PaymentSignal = {

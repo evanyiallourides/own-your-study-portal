@@ -3,12 +3,18 @@ import type { Metadata } from "next";
 
 import { HomeworkList } from "@/components/portal/homework-list";
 import { LessonCard, NextLessonCard, SubjectCard } from "@/components/portal/lesson-cards";
+import {
+  ClassBoardList,
+  DocumentLink,
+  HoursSummary,
+  StudyPlanView,
+} from "@/components/portal/student-records";
 import { ArrowRightIcon, CalendarIcon } from "@/components/ui/icons";
-import { ButtonLink, SectionHead } from "@/components/ui/primitives";
+import { Badge, ButtonLink, Card, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
 import { repositoryFor } from "@/lib/data";
-import { greeting, relativeDayLabel } from "@/lib/format";
+import { formatDate, greeting, relativeDayLabel } from "@/lib/format";
 import { stillRelevant, upcomingSince } from "@/lib/meetings/window";
 
 export const metadata: Metadata = { title: "Home" };
@@ -33,12 +39,20 @@ export default async function StudentHome() {
   }
 
   const now = new Date().toISOString();
-  const [subjects, upcoming, recent, homework] = await Promise.all([
-    repo.getSubjectSummaries(studentId),
-    repo.listLessons({ studentId, status: "scheduled", from: upcomingSince(), order: "asc", limit: 6 }),
-    repo.listLessons({ studentId, status: "published", to: now, order: "desc", limit: 4 }),
-    repo.listHomework({ studentId, completed: false }),
-  ]);
+  const [subjects, upcoming, recent, homework, hours, iaCredits, questionBanks, boards, plan] =
+    await Promise.all([
+      repo.getSubjectSummaries(studentId),
+      repo.listLessons({ studentId, status: "scheduled", from: upcomingSince(), order: "asc", limit: 6 }),
+      repo.listLessons({ studentId, status: "published", to: now, order: "desc", limit: 4 }),
+      repo.listHomework({ studentId, completed: false }),
+      /* Each of these is swallowed rather than fatal: a database that has not
+         run one migration should still show a student their lessons. */
+      repo.getTutoringHours(studentId).catch(() => null),
+      repo.getIaCredits(studentId).catch(() => null),
+      repo.getQuestionBankAccess(studentId).catch(() => null),
+      repo.listClassBoards(studentId).catch(() => []),
+      repo.getStudyPlan(studentId).catch(() => null),
+    ]);
 
   /* Anything that has actually finished is dropped here rather than in the
      query, so a lesson in progress survives the cut and stays at the top where
@@ -91,6 +105,120 @@ export default async function StudentHome() {
           description="When your next lesson is scheduled it will show up here with a link to join it."
         />
       )}
+
+      {/* What this account holds. Everything here arrives on its own when a
+          purchase settles — hours, IA reviews and question bank access — so
+          this is also where a student checks that what they bought is there. */}
+      <section aria-labelledby="account-heading">
+        <h2 id="account-heading" className="sr-only">
+          Your account
+        </h2>
+        <ul className="grid gap-4 md:grid-cols-3">
+          <Card as="li" className="flex flex-col">
+            <p className="eyebrow mb-3">Tutoring hours</p>
+            {hours ? (
+              <HoursSummary hours={hours} compact />
+            ) : (
+              <p className="text-sm text-ink-500">Not available right now.</p>
+            )}
+            <div className="mt-auto pt-4">
+              <Link href="/checkout/standard-10hr" className="text-sm font-semibold text-accent hover:underline">
+                Buy more hours
+              </Link>
+            </div>
+          </Card>
+
+          <Card as="li" className="flex flex-col">
+            <p className="eyebrow mb-3">IA reviews</p>
+            <div className="flex flex-wrap items-baseline gap-2">
+              <p className="font-display text-3xl font-semibold tabular-nums text-ink">
+                {iaCredits?.balance ?? 0}
+              </p>
+              <p className="text-sm text-ink-500">
+                review{iaCredits?.balance === 1 ? "" : "s"} available
+              </p>
+            </div>
+            <p className="mt-2 text-sm text-ink-500">
+              Upload an internal assessment and get it read against the criteria.
+            </p>
+            <div className="mt-auto flex flex-wrap gap-x-4 gap-y-1 pt-4">
+              <Link href="/student/ia-review" className="text-sm font-semibold text-accent hover:underline">
+                {iaCredits && iaCredits.balance > 0 ? "Submit an IA" : "Your reviews"}
+              </Link>
+              <Link href="/checkout/ia-marking" className="text-sm font-semibold text-ink-500 hover:text-accent hover:underline">
+                Buy a review
+              </Link>
+            </div>
+          </Card>
+
+          <Card as="li" className="flex flex-col">
+            <p className="eyebrow mb-3">Question banks &amp; papers</p>
+            {questionBanks?.granted ? (
+              <>
+                <Badge tone="success">Active</Badge>
+                <p className="mt-3 text-sm text-ink-500">
+                  {questionBanks.source === "pooled-hours"
+                    ? `Included with your ${questionBanks.pooledHours} hours.`
+                    : questionBanks.expiresAt
+                      ? `Runs until ${formatDate(questionBanks.expiresAt)}.`
+                      : "Included with your account."}
+                </p>
+              </>
+            ) : (
+              <>
+                <Badge>Not active</Badge>
+                <p className="mt-3 text-sm text-ink-500">
+                  {questionBanks
+                    ? `Included free from ${questionBanks.freeAtHours} hours, or available on its own.`
+                    : "Available on its own or with larger packages."}
+                </p>
+              </>
+            )}
+            <div className="mt-auto flex flex-wrap gap-x-4 gap-y-1 pt-4">
+              {questionBanks?.granted ? (
+                <>
+                  <Link href="/student/question-banks" className="text-sm font-semibold text-accent hover:underline">
+                    Question banks
+                  </Link>
+                  <Link href="/student/papers" className="text-sm font-semibold text-accent hover:underline">
+                    Mock papers
+                  </Link>
+                </>
+              ) : (
+                <Link href="/checkout/question-bank?site=own-your-ib" className="text-sm font-semibold text-accent hover:underline">
+                  Get access
+                </Link>
+              )}
+            </div>
+          </Card>
+        </ul>
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-5">
+        <section className="lg:col-span-3">
+          <SectionHead
+            title="My study plan"
+            action={plan ? <DocumentLink href="/student/plan">Full review &amp; plan</DocumentLink> : null}
+          />
+          <Card>
+            <StudyPlanView
+              plan={plan}
+              showReview={false}
+              emptyText="Your tutor will write an overall review and a plan for the weeks ahead. It will appear here."
+            />
+          </Card>
+        </section>
+
+        <section className="lg:col-span-2">
+          <SectionHead title="Class boards" />
+          <Card>
+            <ClassBoardList
+              boards={boards}
+              emptyText="When your tutor links the whiteboard you use together, it will be here — one click to open it."
+            />
+          </Card>
+        </section>
+      </div>
 
       <section>
         <SectionHead

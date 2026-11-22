@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 
 import { env, isDemoMode } from "@/lib/env";
+import { skuFor } from "@/lib/catalogue";
 import { planFor, type OrderState, type PaymentSignal } from "@/lib/payments/events";
 import {
   claimOrderForBuyer,
@@ -274,7 +275,7 @@ export async function POST(request: NextRequest) {
     const { data: row } = await db
       .from("orders")
       .select(
-        "id, plan, status, instalment_months, instalments_paid, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, sku_name",
+        "id, plan, status, instalment_months, instalments_paid, amount_total_minor, amount_paid_minor, grants_question_bank_days, grants_ia_markings, buyer_email, sku_name, sku_slug",
       )
       .eq("id", orderId)
       .maybeSingle();
@@ -297,6 +298,10 @@ export async function POST(request: NextRequest) {
          database that has not run the IA migration yet, and undefined would
          make grantsSomething() true for every order ever placed. */
       grantsIaMarkings: row.grants_ia_markings ?? null,
+      /* From the catalogue rather than the column, so this read never names a
+         column the database may not have yet — PostgREST refuses the whole
+         select for one unknown name. Only decides whether a refund revokes. */
+      grantsTutoringHours: skuFor(row.sku_slug)?.hours ?? null,
     };
 
     const plan = planFor(signal, order);

@@ -36,6 +36,9 @@ import type {
   AppSettings,
   IaCreditEntry,
   IaReviewRecord,
+  TutoringHourEntry,
+  ClassBoard,
+  StudyPlan,
   IaSubmission,
   Assignment,
   HomeworkItem,
@@ -81,6 +84,10 @@ interface DemoState {
   iaCredits: Record<string, IaCreditEntry[]>;
   iaSubmissions: IaSubmission[];
   iaReviews: IaReviewRecord[];
+  /* -- hours, boards, plans -- */
+  tutoringHours: Record<string, TutoringHourEntry[]>;
+  classBoards: ClassBoard[];
+  studyPlans: Record<string, StudyPlan>;
   settings: AppSettings;
   /** The calendar day the dates above were resolved against. */
   seededOn: string;
@@ -104,8 +111,9 @@ function seed(): DemoState {
     homework: clone(DEMO_HOMEWORK),
     progress: clone(DEMO_PROGRESS),
     notifications: clone(DEMO_NOTIFICATIONS),
-    // Empty on purpose: the demo student earns access through pooled hours,
-    // which exercises the more interesting of the two routes in.
+    // Empty on purpose: the demo student earns access through pooled hours —
+    // the 40 she bought, seeded in tutoringHours below — which exercises the
+    // more interesting of the two routes in.
     questionBankAccess: {},
     orders: clone(DEMO_ORDERS),
     /* One credit and one finished review. Both, because they show different
@@ -132,6 +140,67 @@ function seed(): DemoState {
     ] },
     iaSubmissions: clone([DEMO_IA_SUBMISSION]),
     iaReviews: clone([DEMO_IA_REVIEW]),
+    /* The hours each seeded order bought, as claim_orders_for_profile() would
+       have credited them. */
+    tutoringHours: {
+      "s-sophia": [
+        {
+          id: "hours-momentum",
+          minutes: 40 * 60,
+          reason: "purchase",
+          note: "Paid: Momentum Program",
+          createdAt: new Date(Date.now() - 95 * 86_400_000).toISOString(),
+        },
+      ],
+      "s-marcus": [
+        {
+          id: "hours-elite",
+          minutes: 120 * 60,
+          reason: "purchase",
+          note: "Paid: Elite Program",
+          createdAt: new Date(Date.now() - 62 * 86_400_000).toISOString(),
+        },
+      ],
+    },
+    classBoards: [
+      {
+        id: "board-chem",
+        studentId: "s-sophia",
+        subjectId: "sub-chem-hl",
+        subjectName: "IB Chemistry HL",
+        label: "Chemistry whiteboard",
+        url: "https://excalidraw.com/#room=demo-chemistry",
+        createdAt: new Date(Date.now() - 60 * 86_400_000).toISOString(),
+      },
+      {
+        id: "board-maths",
+        studentId: "s-sophia",
+        subjectId: "sub-maths-aa-hl",
+        subjectName: "IB Mathematics AA HL",
+        label: "Maths board",
+        url: "https://miro.com/app/board/demo-maths/",
+        createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+      },
+    ],
+    studyPlans: {
+      "s-sophia": {
+        studentId: "s-sophia",
+        review:
+          "Sophia's chemistry has moved from recall to reasoning: she now explains equilibrium shifts in terms of Q and K rather than memorised rules, and her energetics calculations are reliable. Paper 2 extended responses are the gap — the chemistry is right but answers stop a step short of the mark scheme.\n\nIn maths, calculus technique is secure. Proof questions and unfamiliar contexts still cost marks under time pressure.",
+        goals: [
+          "Chemistry HL: a secure 6, pushing for 7, by the May mocks",
+          "Maths AA HL: full marks on routine calculus; attempt every proof question",
+          "Chemistry IA: complete draft submitted for review by the end of term",
+        ],
+        focusAreas: [
+          "Paper 2 extended responses — write to the mark scheme, one point per mark",
+          "Kinetics and the Arrhenius equation",
+          "Proof by induction, two timed questions a week",
+        ],
+        nextReviewOn: new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10),
+        updatedAt: new Date(Date.now() - 5 * 86_400_000).toISOString(),
+      },
+    },
     settings: {
       notetakerEnabledGlobally: true,
       notetakerDisplayName: "Own Your Study AI Notetaker",

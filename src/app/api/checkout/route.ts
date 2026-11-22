@@ -29,6 +29,7 @@ import {
 } from "@/lib/payments/stripe";
 import { explainWiseRefusal, wiseAccountFor } from "@/lib/payments/wise-receiving";
 import { generatePaymentReference } from "@/lib/payments/wise-reference";
+import { recordHoursGrant } from "@/lib/payments/hours-grant";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /* ==========================================================================
@@ -163,6 +164,7 @@ export async function POST(request: NextRequest) {
       buyer_is_guardian: parent !== null,
     }).select("id").single();
     if (error || !order) return refuseBuyer("failed", "Could not start checkout.", 500);
+    await recordHoursGrant(db, order.id, sku);
     try {
       const invoice = await btcPayFetch<BtcPayInvoice>(config, "/invoices", {
         method: "POST", body: JSON.stringify({
@@ -267,6 +269,7 @@ export async function POST(request: NextRequest) {
       console.error("[checkout] could not record the order:", error?.code);
       return refuseBuyer("failed", "Could not start checkout. Please try again.", 500);
     }
+    await recordHoursGrant(db, order.id, sku);
 
     /* The details, by email, so a buyer who closes the sheet still has the
        reference. After the response: the redirect must not wait on a mail
@@ -348,6 +351,7 @@ export async function POST(request: NextRequest) {
     console.error("[checkout] could not record the order:", error?.code);
     return refuse("Could not start checkout. Please try again.", 500);
   }
+  await recordHoursGrant(db, order.id, sku);
 
   try {
     const session = await stripeClient().checkout.sessions.create(

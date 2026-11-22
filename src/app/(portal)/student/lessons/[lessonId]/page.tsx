@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { PrintButton } from "@/components/portal/print-button";
 import { NoteList, Rule } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { loadLesson, loadLessonFiles, loadLessonNotes, loadTranscript } from "@/lib/data/cached";
@@ -100,9 +101,40 @@ export default async function StudentLessonOverview({
         </>
       ) : null}
 
-      <Rule />
+      {notes.nextSteps.length > 0 || notes.homework.length > 0 ? (
+        <>
+          <Rule />
+          <section className="grid gap-6 md:grid-cols-2">
+            {notes.nextSteps.length > 0 ? (
+              <div>
+                <h2 className="font-display text-lg font-semibold">Next steps</h2>
+                <div className="mt-3">
+                  <NoteList items={notes.nextSteps} />
+                </div>
+              </div>
+            ) : null}
+            {notes.homework.length > 0 ? (
+              <div>
+                <h2 className="font-display text-lg font-semibold">Homework</h2>
+                <div className="mt-3">
+                  <NoteList items={notes.homework} />
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </>
+      ) : null}
 
-      <nav aria-label="More from this lesson" className="grid gap-3 sm:grid-cols-3">
+      <Rule className="print:hidden" />
+
+      <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+        <p className="text-sm text-ink-500">
+          Keep a copy of this lesson&rsquo;s summary and next steps.
+        </p>
+        <PrintButton label="Print summary or save as PDF" />
+      </div>
+
+      <nav aria-label="More from this lesson" className="grid gap-3 sm:grid-cols-3 print:hidden">
         <Link href={`${base}/notes`} className="card card-interactive p-4">
           <p className="font-semibold text-ink">Full write-up</p>
           <p className="mt-1 text-sm text-ink-500">

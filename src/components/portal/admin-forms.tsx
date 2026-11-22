@@ -760,7 +760,7 @@ export function QuestionBankAccessForm({
 
       <div className="rounded-[8px] border border-rule bg-paper px-4 py-3">
         <p className="text-sm text-ink">
-          <span className="font-medium">{access.pooledHours} pooled hours</span> booked, of{" "}
+          <span className="font-medium">{access.pooledHours} pooled hours</span> bought or booked, of{" "}
           {access.freeAtHours} needed for the banks to be included.
         </p>
         {byHours ? (

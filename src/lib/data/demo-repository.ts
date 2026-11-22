@@ -16,6 +16,8 @@ import {
   type LessonMeetingInput,
   type LessonNotesPatch,
   type CreateIaSubmissionInput,
+  type ClassBoardInput,
+  type StudyPlanInput,
   type Repository,
   type SubjectInput,
   type UpdateLessonInput,
@@ -51,7 +53,13 @@ import type {
   Tutor,
   QuestionBankAccess,
   WiseUnmatchedTransfer,
+  TutoringHours,
+  TutoringHourEntry,
+  ClassBoard,
+  StudyPlan,
 } from "@/lib/types";
+import { summariseTutoringHours } from "@/lib/types";
+import { skuFor } from "@/lib/catalogue";
 
 const STUDENT_VISIBLE_UNPUBLISHED: LessonStatus[] = ["scheduled", "in_progress", "cancelled"];
 
@@ -275,6 +283,42 @@ export class DemoRepository implements Repository {
         grantedAt: new Date().toISOString(),
       };
     }
+
+    /* The other two grants, from the catalogue — the demo order type does not
+       carry their columns. Once per order, as the partial unique indexes make
+       it in SQL. */
+    const sku = skuFor(order.skuSlug);
+    const units = Math.max(order.quantity, 1);
+    if (sku?.grants?.iaMarkings) {
+      const ledger = demoState.iaCredits[studentId] ?? [];
+      if (!ledger.some((e) => e.id === `iacredit-${order.id}`)) {
+        demoState.iaCredits[studentId] = [
+          ...ledger,
+          {
+            id: `iacredit-${order.id}`,
+            delta: sku.grants.iaMarkings * units,
+            reason: "purchase",
+            note: `Paid: ${order.skuName}`,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      }
+    }
+    if (sku?.hours) {
+      const ledger = demoState.tutoringHours[studentId] ?? [];
+      if (!ledger.some((e) => e.id === `hours-${order.id}`)) {
+        demoState.tutoringHours[studentId] = [
+          ...ledger,
+          {
+            id: `hours-${order.id}`,
+            minutes: sku.hours * 60 * units,
+            reason: "purchase",
+            note: `Paid: ${order.skuName}`,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      }
+    }
   }
 
   async unlinkOrder(orderId: string): Promise<void> {
@@ -370,6 +414,92 @@ export class DemoRepository implements Repository {
       },
     ];
     return ledger.balance - 1;
+  }
+
+  /* ==========================================================================
+     Tutoring hours, class boards, study plans
+     --------------------------------------------------------------------------
+     Same rules as the migration: the student, their parents and their tutors
+     read; tutors and administrators write boards and plans; only an
+     administrator adjusts hours by hand.
+     ========================================================================== */
+
+  private canManageStudent(studentId: string): boolean {
+    return this.isAdmin || this.teachesStudent(studentId);
+  }
+
+  async getTutoringHours(studentId: string): Promise<TutoringHours> {
+    if (!this.canSeeStudent(studentId)) return summariseTutoringHours([], []);
+    const entries = [...(demoState.tutoringHours[studentId] ?? [])].sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
+    // Every lesson, published or not — an hour taught is spent before it is written up.
+    const lessons = demoState.lessons.filter((l) => l.studentId === studentId);
+    return summariseTutoringHours(entries, lessons);
+  }
+
+  async adjustTutoringHours(studentId: string, minutes: number, note: string): Promise<void> {
+    this.requireAdmin();
+    if (minutes === 0) return;
+    const entry: TutoringHourEntry = {
+      id: demoId("hours"),
+      minutes,
+      reason: minutes > 0 ? "admin_grant" : "correction",
+      note,
+      createdAt: new Date().toISOString(),
+    };
+    demoState.tutoringHours[studentId] = [...(demoState.tutoringHours[studentId] ?? []), entry];
+  }
+
+  async listClassBoards(studentId: string): Promise<ClassBoard[]> {
+    if (!this.canSeeStudent(studentId)) return [];
+    return demoState.classBoards
+      .filter((b) => b.studentId === studentId)
+      .map((b) => ({
+        ...b,
+        subjectName: b.subjectId
+          ? demoState.subjects.find((s) => s.id === b.subjectId)?.displayName ?? null
+          : null,
+      }))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async addClassBoard(input: ClassBoardInput): Promise<void> {
+    if (!this.canManageStudent(input.studentId)) throw new AccessDeniedError();
+    demoState.classBoards.push({
+      id: demoId("board"),
+      studentId: input.studentId,
+      subjectId: input.subjectId,
+      subjectName: null,
+      label: input.label,
+      url: input.url,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  async removeClassBoard(boardId: string): Promise<void> {
+    const board = demoState.classBoards.find((b) => b.id === boardId);
+    if (!board) throw new NotFoundError("That board does not exist.");
+    if (!this.canManageStudent(board.studentId)) throw new AccessDeniedError();
+    demoState.classBoards = demoState.classBoards.filter((b) => b.id !== boardId);
+  }
+
+  async getStudyPlan(studentId: string): Promise<StudyPlan | null> {
+    if (!this.canSeeStudent(studentId)) return null;
+    const plan = demoState.studyPlans[studentId];
+    return plan ? structuredClone(plan) : null;
+  }
+
+  async saveStudyPlan(studentId: string, input: StudyPlanInput): Promise<void> {
+    if (!this.canManageStudent(studentId)) throw new AccessDeniedError();
+    demoState.studyPlans[studentId] = {
+      studentId,
+      review: input.review,
+      goals: [...input.goals],
+      focusAreas: [...input.focusAreas],
+      nextReviewOn: input.nextReviewOn,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   async listIaSubmissions(
@@ -483,9 +613,14 @@ export class DemoRepository implements Repository {
       };
     }
 
-    const minutes = demoState.lessons
+    /* The larger of booked and bought, as student_pooled_minutes() takes it:
+       a booked lesson is drawn from purchased hours, so summing would count
+       the same hour twice. */
+    const booked = demoState.lessons
       .filter((l) => l.studentId === studentId && l.status !== "cancelled")
       .reduce((total, l) => total + l.durationMinutes, 0);
+    const bought = (demoState.tutoringHours[studentId] ?? []).reduce((t, e) => t + e.minutes, 0);
+    const minutes = Math.max(booked, bought);
     const pooledHours = Math.round(minutes / 6) / 10;
     const freeAtHours = demoState.settings.questionBankFreeHours;
 

@@ -8,9 +8,16 @@ import {
   ToggleAssignmentButton,
 } from "@/components/portal/admin-forms";
 import { IaCreditForm } from "@/components/portal/ia-credit-form";
+import { ClassBoardList, HoursLedger, HoursSummary } from "@/components/portal/student-records";
+import {
+  ClassBoardForm,
+  RemoveBoardButton,
+  StudyPlanForm,
+  TutoringHoursForm,
+} from "@/components/portal/student-records-forms";
 import { IaStudentPanel } from "@/components/portal/ia-student-panel";
 import { ChevronLeftIcon } from "@/components/ui/icons";
-import { Avatar, Badge, Card, KeyValue, SectionHead } from "@/components/ui/primitives";
+import { Avatar, Badge, Card, KeyValue, Rule, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
 import { repositoryFor } from "@/lib/data";
@@ -30,8 +37,19 @@ export default async function AdminStudentPage({
   const student = await repo.getStudent(studentId);
   if (!student) notFound();
 
-  const [assignments, subjects, lessons, questionBanks, parents, allParents, iaCredits, iaSubmissions] =
-    await Promise.all([
+  const [
+    assignments,
+    subjects,
+    lessons,
+    questionBanks,
+    parents,
+    allParents,
+    iaCredits,
+    iaSubmissions,
+    hours,
+    boards,
+    plan,
+  ] = await Promise.all([
       repo.listAssignments({ studentId }),
       repo.listStudentSubjects(studentId),
       repo.listLessons({ studentId, order: "desc", limit: 20 }),
@@ -42,6 +60,9 @@ export default async function AdminStudentPage({
          should still show an administrator everything else about a student. */
       repo.getIaCredits(studentId).catch(() => ({ balance: 0, entries: [] })),
       repo.listIaSubmissions({ studentId }).catch(() => []),
+      repo.getTutoringHours(studentId).catch(() => null),
+      repo.listClassBoards(studentId).catch(() => []),
+      repo.getStudyPlan(studentId).catch(() => null),
     ]);
 
   const consent = student.consent;
@@ -129,6 +150,19 @@ export default async function AdminStudentPage({
 
       <section>
         <SectionHead
+          title="Tutoring hours"
+          description="Credited automatically when a tutoring package is paid for. Add hours paid another way, or correct a mistake — every change leaves a row."
+        />
+        <Card className="space-y-6">
+          {hours ? <HoursSummary hours={hours} /> : <p className="text-sm text-ink-500">The hours migration has not been applied yet.</p>}
+          <Rule />
+          <TutoringHoursForm studentId={studentId} />
+          {hours ? <HoursLedger hours={hours} /> : null}
+        </Card>
+      </section>
+
+      <section>
+        <SectionHead
           title="Question banks"
           description={
             questionBanks.granted
@@ -160,6 +194,28 @@ export default async function AdminStudentPage({
           creditBalance={iaCredits.balance}
         />
       ) : null}
+
+      <section>
+        <SectionHead
+          title="Study plan"
+          description="The overall review and plan ahead, shown on the student's and parents' dashboards."
+        />
+        <Card>
+          <StudyPlanForm studentId={studentId} plan={plan} />
+        </Card>
+      </section>
+
+      <section>
+        <SectionHead title="Class boards" description="Shared whiteboards, opened from the student's dashboard." />
+        <Card className="space-y-6">
+          <ClassBoardList
+            boards={boards}
+            renderAction={(board) => <RemoveBoardButton boardId={board.id} studentId={studentId} />}
+          />
+          <Rule />
+          <ClassBoardForm studentId={studentId} subjects={subjects} />
+        </Card>
+      </section>
 
       <section>
         <SectionHead

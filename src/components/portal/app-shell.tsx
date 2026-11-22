@@ -63,7 +63,7 @@ export function AppShell({
       </a>
 
       {/* -- Sidebar, large screens -- */}
-      <aside className="fixed inset-y-0 left-0 hidden w-[264px] flex-col border-r border-rule bg-paper-3 lg:flex">
+      <aside className="print:hidden fixed inset-y-0 left-0 hidden w-[264px] flex-col border-r border-rule bg-paper-3 lg:flex">
         <div className="px-5 py-5">
           <Brand href={`/${session.profile.role}`} />
         </div>
@@ -82,9 +82,9 @@ export function AppShell({
         </div>
       </aside>
 
-      <div className="lg:pl-[264px]">
+      <div className="lg:pl-[264px] print:pl-0">
         {/* -- Bar over the content column -- */}
-        <header className="sticky top-0 z-40 border-b border-rule bg-paper/85 backdrop-blur-md">
+        <header className="print:hidden sticky top-0 z-40 border-b border-rule bg-paper/85 backdrop-blur-md">
           <div className="mx-auto flex h-14 max-w-[1180px] items-center gap-3 px-4 sm:px-6 lg:px-8">
             <MobileNav
               items={items}

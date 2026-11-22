@@ -33,7 +33,13 @@ function sessionFor(profileId: string): PortalSession {
 const STUDENT = "s-sophia";
 
 describe("question bank access", () => {
-  beforeEach(() => resetDemoState());
+  /* Bought hours count towards the threshold too, and the demo student has a
+     40-hour package. These cases are about subscriptions and booked lessons,
+     so they start from a student who has bought no hours. */
+  beforeEach(() => {
+    resetDemoState();
+    demoState.tutoringHours = {};
+  });
 
   it("is refused to a student who has neither a subscription nor the hours", async () => {
     const repo = new DemoRepository(sessionFor("p-sophia"));

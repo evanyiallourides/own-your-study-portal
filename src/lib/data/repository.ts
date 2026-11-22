@@ -42,6 +42,9 @@ import type {
   IaSubmission,
   IaSubmissionWithReviews,
   WiseUnmatchedTransfer,
+  TutoringHours,
+  ClassBoard,
+  StudyPlan,
 } from "@/lib/types";
 
 export interface LessonFilter {
@@ -121,6 +124,20 @@ export interface UploadFileInput {
   fileSize: number;
   category: LessonFile["category"];
   body: ArrayBuffer;
+}
+
+export interface ClassBoardInput {
+  studentId: string;
+  subjectId: string | null;
+  label: string;
+  url: string;
+}
+
+export interface StudyPlanInput {
+  review: string | null;
+  goals: string[];
+  focusAreas: string[];
+  nextReviewOn: string | null;
 }
 
 export interface CreateIaSubmissionInput {
@@ -213,6 +230,21 @@ export interface Repository {
   /** Store a finished review. Returns its id so the credit can be tied to it. */
   saveIaReview(submissionId: string, review: unknown): Promise<string>;
   requestProfessionalReview(submissionId: string): Promise<void>;
+
+  /* -- tutoring hours --
+     Purchases arrive through claim_orders_for_profile(); the write here is an
+     administrator's correction, signed and noted like the IA credits. */
+  getTutoringHours(studentId: string): Promise<TutoringHours>;
+  adjustTutoringHours(studentId: string, minutes: number, note: string): Promise<void>;
+
+  /* -- class boards & study plans --
+     Read by the student, their parents and their tutors; written by their
+     tutors and administrators. */
+  listClassBoards(studentId: string): Promise<ClassBoard[]>;
+  addClassBoard(input: ClassBoardInput): Promise<void>;
+  removeClassBoard(boardId: string): Promise<void>;
+  getStudyPlan(studentId: string): Promise<StudyPlan | null>;
+  saveStudyPlan(studentId: string, input: StudyPlanInput): Promise<void>;
 
   /* -- orders -- */
   listOrders(filter?: { status?: OrderStatus[]; unmatchedOnly?: boolean }): Promise<Order[]>;

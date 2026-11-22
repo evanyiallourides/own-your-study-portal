@@ -77,7 +77,7 @@ export interface QuestionBankAccess {
   expiresAt: string | null;
   note: string | null;
   grantedAt: string | null;
-  /** Hours booked and not cancelled, and the threshold they are measured against. */
+  /** The larger of hours bought and hours booked (not cancelled), and the threshold they are measured against. */
   pooledHours: number;
   freeAtHours: number;
   /** True when a subscription row exists at all, expired or not. */
@@ -481,4 +481,90 @@ export interface IaCreditEntry {
   reason: "purchase" | "admin_grant" | "review" | "refund" | "correction";
   note: string | null;
   createdAt: string;
+}
+
+/* ==========================================================================
+   Tutoring hours
+   --------------------------------------------------------------------------
+   Bought through the checkout, recorded in a ledger, and drawn down by
+   lessons. Nothing here is stored as a balance: purchased comes from the
+   ledger and the rest from the lessons themselves, so a cancelled lesson gives
+   its hour back without anybody touching the ledger.
+   ========================================================================== */
+
+export interface TutoringHourEntry {
+  id: string;
+  /** Positive buys, negative takes back. */
+  minutes: number;
+  reason: "purchase" | "admin_grant" | "refund" | "correction";
+  note: string | null;
+  createdAt: string;
+}
+
+export interface TutoringHours {
+  /** Everything bought or granted, net of refunds and corrections. */
+  purchasedMinutes: number;
+  /** Lessons already started or taught, not cancelled. */
+  usedMinutes: number;
+  /** Lessons still to come, not cancelled. */
+  bookedMinutes: number;
+  /** Purchased minus used minus booked. Negative means booked beyond what was bought. */
+  remainingMinutes: number;
+  entries: TutoringHourEntry[];
+}
+
+/** Turn a lesson list and a ledger into the four numbers above. */
+export function summariseTutoringHours(
+  entries: TutoringHourEntry[],
+  lessons: { scheduledAt: string; durationMinutes: number; status: LessonStatus }[],
+  now: Date = new Date(),
+): TutoringHours {
+  const purchasedMinutes = entries.reduce((total, e) => total + e.minutes, 0);
+  let usedMinutes = 0;
+  let bookedMinutes = 0;
+  for (const lesson of lessons) {
+    if (lesson.status === "cancelled") continue;
+    if (new Date(lesson.scheduledAt) <= now) usedMinutes += lesson.durationMinutes;
+    else bookedMinutes += lesson.durationMinutes;
+  }
+  return {
+    purchasedMinutes,
+    usedMinutes,
+    bookedMinutes,
+    remainingMinutes: purchasedMinutes - usedMinutes - bookedMinutes,
+    entries,
+  };
+}
+
+/* ==========================================================================
+   Class boards and study plans
+   ========================================================================== */
+
+/** A shared whiteboard the tutor and student come back to across lessons. */
+export interface ClassBoard {
+  id: string;
+  studentId: string;
+  /** Null when the board is shared across every subject. */
+  subjectId: string | null;
+  subjectName: string | null;
+  label: string;
+  url: string;
+  createdAt: string;
+}
+
+/**
+ * The tutor's review of where a student stands, and the plan ahead.
+ *
+ * Lesson notes describe one lesson. This describes the course, and it is the
+ * document a student (or a parent) reads to answer "how am I doing, and what
+ * happens next?".
+ */
+export interface StudyPlan {
+  studentId: string;
+  review: string | null;
+  goals: string[];
+  focusAreas: string[];
+  /** ISO date (YYYY-MM-DD) of the next planned review, if set. */
+  nextReviewOn: string | null;
+  updatedAt: string;
 }

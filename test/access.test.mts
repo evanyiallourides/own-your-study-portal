@@ -372,3 +372,74 @@ describe("homework", () => {
     await rejects(repoFor("p-sophia").setHomeworkCompleted(marcusItem.id, true));
   });
 });
+
+describe("hours, class boards and study plans", () => {
+  const plan = { review: "Steady progress.", goals: ["A 7"], focusAreas: ["Kinetics"], nextReviewOn: null };
+  const board = { studentId: "s-marcus", subjectId: null, label: "Board", url: "https://miro.com/app/board/x/" };
+
+  it("shows a student their own hours, boards and plan", async () => {
+    const repo = repoFor("p-sophia");
+    assert.ok((await repo.getTutoringHours("s-sophia")).purchasedMinutes > 0);
+    assert.ok((await repo.listClassBoards("s-sophia")).length > 0);
+    assert.ok(await repo.getStudyPlan("s-sophia"));
+  });
+
+  it("shows a student nothing of another student's", async () => {
+    const repo = repoFor("p-sophia");
+    assert.equal((await repo.getTutoringHours("s-marcus")).purchasedMinutes, 0);
+    assert.deepEqual(await repo.listClassBoards("s-marcus"), []);
+    assert.equal(await repo.getStudyPlan("s-marcus"), null);
+  });
+
+  it("lets a parent read their child's plan and boards, and change neither", async () => {
+    const repo = repoFor("p-helen");
+    assert.ok(await repo.getStudyPlan("s-sophia"));
+    assert.ok((await repo.listClassBoards("s-sophia")).length > 0);
+    await rejects(repo.saveStudyPlan("s-sophia", plan));
+    await rejects(repo.addClassBoard({ ...board, studentId: "s-sophia" }));
+  });
+
+  it("refuses a student writing their own plan or boards", async () => {
+    const repo = repoFor("p-sophia");
+    await rejects(repo.saveStudyPlan("s-sophia", plan));
+    await rejects(repo.addClassBoard({ ...board, studentId: "s-sophia" }));
+    await rejects(repo.removeClassBoard("board-chem"));
+  });
+
+  it("lets a tutor write plans and boards for students they teach, and no others", async () => {
+    const daniel = repoFor("p-daniel");
+    await daniel.saveStudyPlan("s-sophia", plan);
+    assert.equal((await daniel.getStudyPlan("s-sophia"))?.review, "Steady progress.");
+    await daniel.addClassBoard({ ...board, studentId: "s-sophia" });
+    await daniel.removeClassBoard("board-chem");
+
+    await rejects(daniel.saveStudyPlan("s-marcus", plan));
+    await rejects(daniel.addClassBoard(board));
+  });
+
+  it("keeps hand adjustments of hours to administrators", async () => {
+    await rejects(repoFor("p-imogen").adjustTutoringHours("s-sophia", 60, "nope"));
+    const admin = repoFor("p-admin");
+    const before = (await admin.getTutoringHours("s-sophia")).purchasedMinutes;
+    await admin.adjustTutoringHours("s-sophia", 90, "Paid by transfer");
+    assert.equal((await admin.getTutoringHours("s-sophia")).purchasedMinutes, before + 90);
+  });
+
+  it("credits a package's hours and IA reviews when an administrator links its order", async () => {
+    const admin = repoFor("p-admin");
+    const order = demoState.orders.find((o) => o.id === "o-starter-refunded")!;
+    order.status = "paid";
+    await admin.linkOrderToStudent(order.id, "s-marcus");
+    await admin.linkOrderToStudent(order.id, "s-marcus");
+    const ledger = (await admin.getTutoringHours("s-marcus")).entries;
+    assert.equal(ledger.filter((e) => e.id === `hours-${order.id}`).length, 1);
+    assert.equal(ledger.find((e) => e.id === `hours-${order.id}`)?.minutes, 5 * 60);
+  });
+
+  it("counts bought hours towards question bank access, as the database does", async () => {
+    // Marcus bought 120 hours; whatever he has booked, that is past the threshold.
+    const access = await repoFor("p-admin").getQuestionBankAccess("s-marcus");
+    assert.ok(access.pooledHours >= 120);
+    assert.equal(access.granted, true);
+  });
+});

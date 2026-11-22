@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { HomeworkList } from "@/components/portal/homework-list";
 import { LessonCard, NextLessonCard } from "@/components/portal/lesson-cards";
 import { Card, SectionHead } from "@/components/ui/primitives";
+import { DocumentLink, HoursSummary, StudyPlanView } from "@/components/portal/student-records";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
 import { repositoryFor } from "@/lib/data";
@@ -40,14 +41,16 @@ export default async function ParentHome() {
   const now = new Date().toISOString();
   const cards = await Promise.all(
     children.map(async (child) => {
-      const [upcoming, recent, homework, subjects] = await Promise.all([
+      const [upcoming, recent, homework, subjects, plan, hours] = await Promise.all([
         repo.listLessons({ studentId: child.id, status: "scheduled", from: upcomingSince(), order: "asc", limit: 3 }),
         repo.listLessons({ studentId: child.id, status: "published", to: now, order: "desc", limit: 4 }),
         repo.listHomework({ studentId: child.id, completed: false }),
         repo.getSubjectSummaries(child.id),
+        repo.getStudyPlan(child.id).catch(() => null),
+        repo.getTutoringHours(child.id).catch(() => null),
       ]);
       const latestNotes = recent[0] ? await repo.getLessonNotes(recent[0].id).catch(() => null) : null;
-      return { child, upcoming: stillRelevant(upcoming), recent, homework, subjects, latestNotes };
+      return { child, upcoming: stillRelevant(upcoming), recent, homework, subjects, latestNotes, plan, hours };
     }),
   );
 
@@ -64,7 +67,7 @@ export default async function ParentHome() {
         </p>
       </header>
 
-      {cards.map(({ child, upcoming, recent, homework, subjects, latestNotes }) => (
+      {cards.map(({ child, upcoming, recent, homework, subjects, latestNotes, plan, hours }) => (
         <section key={child.id} className="space-y-8">
           {cards.length > 1 ? (
             <h2 className="font-display text-2xl font-semibold">{child.profile.fullName}</h2>
@@ -91,6 +94,28 @@ export default async function ParentHome() {
           {upcoming[0] ? (
             <NextLessonCard lesson={upcoming[0]} role="parent" audience="student" />
           ) : null}
+
+          <div className="grid gap-6 lg:grid-cols-5">
+            <div className="lg:col-span-3">
+              <SectionHead
+                title="Review & plan"
+                action={<DocumentLink href={`/parent/plan/${child.id}`}>Full document</DocumentLink>}
+              />
+              <Card>
+                <StudyPlanView
+                  plan={plan}
+                  showReview={false}
+                  emptyText="The tutor's overall review and plan will appear here once it is written."
+                />
+              </Card>
+            </div>
+            <div className="lg:col-span-2">
+              <SectionHead title="Tutoring hours" />
+              <Card>
+                {hours ? <HoursSummary hours={hours} compact /> : <p className="text-sm text-ink-500">Not available.</p>}
+              </Card>
+            </div>
+          </div>
 
           {latestNotes?.summary ? (
             <div>
