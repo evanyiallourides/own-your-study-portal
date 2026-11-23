@@ -197,8 +197,19 @@ supabase/migrations/
 ├── 20260914130000_transcript_retention.sql  the purge, and what it leaves behind
 ├── 20260914131000_transcript_retention_schedule.sql  when the purge runs
 ├── 20260915100000_auto_enrol_buyers.sql     a payment invites the student
-└── 20260915140000_parent_accounts.sql       …and the parent who paid for them
+├── 20260915140000_parent_accounts.sql       …and the parent who paid for them
+├── 20260917110000_ia_notification_kind.sql  the IA review notification
+├── 20260917120000_ia_marking.sql            IA submissions, reviews, credits
+├── 20260918100000_wise_payment_provider.sql Wise as a payment provider
+├── 20260918101000_wise_orders.sql           Wise references and transfers
+├── 20261119100000_btcpay.sql                Bitcoin orders through BTCPay
+└── 20261123100000_hours_boards_plans.sql    tutoring hours, class boards, study plans
 ```
+
+The last one is what makes a tutoring purchase credit its hours, and what lets
+an administrator link an unmatched order and have its grants applied. Until it
+runs, checkout still works and orders are recorded, but no hours are credited
+and the dashboard's hours, boards and plan sections stay empty.
 
 With the Supabase CLI:
 

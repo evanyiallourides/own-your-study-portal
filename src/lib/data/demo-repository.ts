@@ -55,6 +55,7 @@ import type {
   WiseUnmatchedTransfer,
   TutoringHours,
   TutoringHourEntry,
+  StudentHourBalance,
   ClassBoard,
   StudyPlan,
 } from "@/lib/types";
@@ -267,6 +268,10 @@ export class DemoRepository implements Repository {
     order.studentName = student.profile?.fullName ?? null;
     order.claimedAt = new Date().toISOString();
 
+    // As link_order_to_student(): nothing is granted for money that has not
+    // arrived or has gone back.
+    if (!["paid", "instalments_active", "past_due", "completed"].includes(order.status)) return;
+
     // Apply what the order granted, extending rather than resetting — the same
     // rule claim_orders_for_profile() applies in SQL.
     if (order.grantsQuestionBankDays !== null) {
@@ -285,39 +290,30 @@ export class DemoRepository implements Repository {
     }
 
     /* The other two grants, from the catalogue — the demo order type does not
-       carry their columns. Once per order, as the partial unique indexes make
-       it in SQL. */
+       carry their columns. One entry per order, moved rather than duplicated
+       when the order is re-linked to a different student. */
     const sku = skuFor(order.skuSlug);
     const units = Math.max(order.quantity, 1);
+    const now = new Date().toISOString();
     if (sku?.grants?.iaMarkings) {
-      const ledger = demoState.iaCredits[studentId] ?? [];
-      if (!ledger.some((e) => e.id === `iacredit-${order.id}`)) {
-        demoState.iaCredits[studentId] = [
-          ...ledger,
-          {
-            id: `iacredit-${order.id}`,
-            delta: sku.grants.iaMarkings * units,
-            reason: "purchase",
-            note: `Paid: ${order.skuName}`,
-            createdAt: new Date().toISOString(),
-          },
-        ];
+      const entryId = `iacredit-${order.id}`;
+      for (const id of Object.keys(demoState.iaCredits)) {
+        demoState.iaCredits[id] = (demoState.iaCredits[id] ?? []).filter((e) => e.id !== entryId);
       }
+      demoState.iaCredits[studentId] = [
+        ...(demoState.iaCredits[studentId] ?? []),
+        { id: entryId, delta: sku.grants.iaMarkings * units, reason: "purchase", note: `Paid: ${order.skuName}`, createdAt: now },
+      ];
     }
     if (sku?.hours) {
-      const ledger = demoState.tutoringHours[studentId] ?? [];
-      if (!ledger.some((e) => e.id === `hours-${order.id}`)) {
-        demoState.tutoringHours[studentId] = [
-          ...ledger,
-          {
-            id: `hours-${order.id}`,
-            minutes: sku.hours * 60 * units,
-            reason: "purchase",
-            note: `Paid: ${order.skuName}`,
-            createdAt: new Date().toISOString(),
-          },
-        ];
+      const entryId = `hours-${order.id}`;
+      for (const id of Object.keys(demoState.tutoringHours)) {
+        demoState.tutoringHours[id] = (demoState.tutoringHours[id] ?? []).filter((e) => e.id !== entryId);
       }
+      demoState.tutoringHours[studentId] = [
+        ...(demoState.tutoringHours[studentId] ?? []),
+        { id: entryId, minutes: sku.hours * 60 * units, reason: "purchase", note: `Paid: ${order.skuName}`, createdAt: now },
+      ];
     }
   }
 
@@ -451,6 +447,17 @@ export class DemoRepository implements Repository {
     demoState.tutoringHours[studentId] = [...(demoState.tutoringHours[studentId] ?? []), entry];
   }
 
+  async listHourBalances(): Promise<StudentHourBalance[]> {
+    const visible = demoState.students.filter((s) => this.canSeeStudent(s.id));
+    return Promise.all(
+      visible.map(async (s) => {
+        const { entries: _entries, ...balance } = await this.getTutoringHours(s.id);
+        void _entries;
+        return { studentId: s.id, ...balance };
+      }),
+    );
+  }
+
   async listClassBoards(studentId: string): Promise<ClassBoard[]> {
     if (!this.canSeeStudent(studentId)) return [];
     return demoState.classBoards
@@ -490,6 +497,12 @@ export class DemoRepository implements Repository {
     return plan ? structuredClone(plan) : null;
   }
 
+  async listStudyPlans(): Promise<StudyPlan[]> {
+    return Object.values(demoState.studyPlans)
+      .filter((plan) => this.canSeeStudent(plan.studentId))
+      .map((plan) => structuredClone(plan));
+  }
+
   async saveStudyPlan(studentId: string, input: StudyPlanInput): Promise<void> {
     if (!this.canManageStudent(studentId)) throw new AccessDeniedError();
     demoState.studyPlans[studentId] = {
@@ -516,7 +529,9 @@ export class DemoRepository implements Repository {
   async getIaSubmission(submissionId: string): Promise<IaSubmissionWithReviews | null> {
     const submission = demoState.iaSubmissions.find((s) => s.id === submissionId);
     if (!submission) return null;
-    if (!this.canSeeStudent(submission.studentId)) throw new AccessDeniedError();
+    // Null rather than a throw: a read the caller is not entitled to returns
+    // nothing, as RLS does, so the page answers 404 instead of an error.
+    if (!this.canSeeStudent(submission.studentId)) return null;
     return this.withReviews(submission);
   }
 

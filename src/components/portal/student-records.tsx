@@ -42,7 +42,7 @@ export function HoursSummary({ hours, compact = false }: { hours: TutoringHours;
           {formatHours(Math.max(hours.remainingMinutes, 0))}
         </p>
         <p className="text-sm text-ink-500">
-          {Math.abs(hours.remainingMinutes) === 60 ? "hour" : "hours"} left to book
+          {hours.remainingMinutes === 60 ? "hour" : "hours"} left to book
         </p>
       </div>
 

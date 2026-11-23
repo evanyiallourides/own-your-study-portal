@@ -74,6 +74,7 @@ import type {
   WiseUnmatchedTransfer,
   TutoringHourEntry,
   TutoringHours,
+  StudentHourBalance,
   ClassBoard,
   StudyPlan,
 } from "@/lib/types";
@@ -331,29 +332,35 @@ export class SupabaseRepository implements Repository {
   }
 
   async linkOrderToStudent(orderId: string, studentId: string): Promise<void> {
-    // Attach first, then let the SQL function apply whatever the order granted.
-    // The rule about a renewal extending rather than resetting lives there, and
-    // restating it here would give two answers to one question.
-    const { error } = await this.db
-      .from("orders")
-      .update({ student_id: studentId, claimed_at: new Date().toISOString() })
-      .eq("id", orderId);
-    if (error) throw new Error(error.message);
+    /* One SQL call that attaches the order and applies what it bought. The
+       older two-step version set student_id and then asked
+       claim_orders_for_profile() to apply it — but that function only
+       considers orders with no student, so nothing was ever granted. */
+    const { error } = await this.db.rpc("link_order_to_student", {
+      p_order_id: orderId,
+      p_student_id: studentId,
+    });
+    if (!error) return;
 
-    const { data: student } = await this.db
-      .from("students")
-      .select("profile_id")
-      .eq("id", studentId)
-      .maybeSingle();
-    const profileId = (student as { profile_id?: string } | null)?.profile_id;
-    if (profileId) {
-      await this.db.rpc("claim_orders_for_profile", { p_profile_id: profileId });
+    // A database that has not run the hours migration yet has no such
+    // function. Attach the order so the queue clears; grants then need the
+    // migration, which preflight and the admin page both point at.
+    if (/link_order_to_student/.test(error.message) && /(find|exist)/i.test(error.message)) {
+      const { error: updateError } = await this.db
+        .from("orders")
+        .update({ student_id: studentId, claimed_at: new Date().toISOString() })
+        .eq("id", orderId);
+      if (updateError) throw new Error(updateError.message);
+      console.warn("[orders] link_order_to_student is missing — run the hours migration to apply grants.");
+      return;
     }
+    fail("Could not link the order", error);
   }
 
   async unlinkOrder(orderId: string): Promise<void> {
     // Deliberately does not revoke anything. Access may also be earned through
-    // pooled hours, and taking it away here would be guessing.
+    // pooled hours, and taking it away here would be guessing. Linking the
+    // order to the right student afterwards moves its grants across.
     const { error } = await this.db
       .from("orders")
       .update({ student_id: null, claimed_at: null, claimed_by: null })
@@ -574,6 +581,23 @@ export class SupabaseRepository implements Repository {
     if (error) fail("Could not change tutoring hours", error);
   }
 
+  async listHourBalances(): Promise<StudentHourBalance[]> {
+    const { data, error } = await this.db.rpc("tutoring_hour_balances");
+    if (error || !Array.isArray(data)) return [];
+    return data.map((row: Record<string, unknown>) => {
+      const purchasedMinutes = Number(row.purchased_minutes ?? 0);
+      const usedMinutes = Number(row.used_minutes ?? 0);
+      const bookedMinutes = Number(row.booked_minutes ?? 0);
+      return {
+        studentId: row.student_id as string,
+        purchasedMinutes,
+        usedMinutes,
+        bookedMinutes,
+        remainingMinutes: purchasedMinutes - usedMinutes - bookedMinutes,
+      };
+    });
+  }
+
   async listClassBoards(studentId: string): Promise<ClassBoard[]> {
     const { data, error } = await this.db
       .from("class_boards")
@@ -626,6 +650,21 @@ export class SupabaseRepository implements Repository {
       nextReviewOn: (data.next_review_on as string | null) ?? null,
       updatedAt: data.updated_at as string,
     };
+  }
+
+  async listStudyPlans(): Promise<StudyPlan[]> {
+    const { data, error } = await this.db
+      .from("study_plans")
+      .select("student_id, review, goals, focus_areas, next_review_on, updated_at");
+    if (error) return [];
+    return (data ?? []).map((row: Record<string, unknown>) => ({
+      studentId: row.student_id as string,
+      review: (row.review as string | null) ?? null,
+      goals: (row.goals as string[] | null) ?? [],
+      focusAreas: (row.focus_areas as string[] | null) ?? [],
+      nextReviewOn: (row.next_review_on as string | null) ?? null,
+      updatedAt: row.updated_at as string,
+    }));
   }
 
   async saveStudyPlan(studentId: string, input: StudyPlanInput): Promise<void> {

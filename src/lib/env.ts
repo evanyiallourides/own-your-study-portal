@@ -229,7 +229,9 @@ export function wiseStatus(): IntegrationStatus {
   if (!env.wiseApiToken) {
     return {
       configured: false,
-      detail: "No WISE_API_TOKEN set. USD/EUR/GBP orders can be quoted but not taken.",
+      detail:
+        "No WISE_API_TOKEN set. Bank transfers can still be taken and marked paid by hand " +
+        "from Orders, but nothing is matched automatically.",
     };
   }
   if (!env.wiseWebhookPublicKey) {

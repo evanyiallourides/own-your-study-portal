@@ -315,3 +315,122 @@ describe("summariseTutoringHours", () => {
     assert.equal(hours.remainingMinutes, -60);
   });
 });
+
+describe("an instalment plan that ends early", () => {
+  it("takes back only the unpaid share of its hours", async () => {
+    // A fresh student so earlier fixtures do not affect the balance.
+    const who = "88888888-8888-8888-8888-888888888888";
+    await db.exec(`
+      insert into auth.users (id, email) values ('${who}', 'plan@example.com');
+      insert into public.profiles (id, email, first_name, last_name, role)
+        values ('${who}', 'plan@example.com', 'Pia', 'Plan', 'student')
+        on conflict (id) do nothing;
+      insert into public.students (profile_id) values ('${who}') on conflict do nothing;`);
+    const sid = (await one<{ id: string }>(`select id from public.students where profile_id = '${who}'`)).id;
+
+    const { id: order } = await one<{ id: string }>(`
+      insert into public.orders
+        (provider, sku_slug, sku_name, plan, instalment_months, instalments_paid, currency,
+         amount_total_minor, amount_paid_minor, buyer_email, status, grants_tutoring_hours)
+      values ('stripe', 'committed-20hr', 'Committed Pack', 'instalments', 4, 1, 'usd',
+              132000, 33000, 'plan@example.com', 'instalments_active', 20)
+      returning id`);
+    await n(`select public.claim_orders_for_profile('${who}') as n`);
+    assert.equal(await n(`select public.tutoring_minutes_purchased('${sid}') as n`), 20 * 60);
+
+    // Two of four paid, then the plan lapses.
+    await db.exec(`update public.orders set amount_paid_minor = 66000, status = 'cancelled' where id = '${order}'`);
+    const taken = await n(`select public.revoke_tutoring_hours_for_order('${order}') as n`);
+    assert.equal(taken, 10 * 60, "half unpaid, so half the hours go back");
+    assert.equal(await n(`select public.tutoring_minutes_purchased('${sid}') as n`), 10 * 60);
+  });
+});
+
+describe("linking an order by hand", () => {
+  const ADMIN = "99999999-9999-9999-9999-999999999999";
+  const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  let a: string;
+  let b: string;
+
+  before(async () => {
+    await db.exec(`
+      insert into auth.users (id, email, raw_user_meta_data) values
+        ('${ADMIN}', 'boss@example.com', '{"role":"admin"}'),
+        ('${A}', 'a@example.com', '{}'), ('${B}', 'b@example.com', '{}');
+      insert into public.profiles (id, email, first_name, last_name, role) values
+        ('${ADMIN}', 'boss@example.com', 'Bo', 'Boss', 'admin')
+        on conflict (id) do update set role = 'admin';`);
+    a = (await one<{ id: string }>(`select id from public.students where profile_id = '${A}'`)).id;
+    b = (await one<{ id: string }>(`select id from public.students where profile_id = '${B}'`)).id;
+  });
+
+  async function unmatchedOrder(status = "paid"): Promise<string> {
+    const { id } = await one<{ id: string }>(`
+      insert into public.orders
+        (provider, sku_slug, sku_name, plan, quantity, currency, amount_total_minor, buyer_email,
+         status, grants_tutoring_hours, grants_ia_markings)
+      values ('wise', 'standard-10hr', 'Standard Pack', 'full', 1, 'gbp', 54000,
+              'someone-else@example.com', '${status}', 10, 1)
+      returning id`);
+    return id;
+  }
+  const minutes = (sid: string) => n(`select public.tutoring_minutes_purchased('${sid}') as n`);
+  const credits = (sid: string) => n(`select public.ia_credit_balance('${sid}') as n`);
+
+  it("applies what the order bought, which the old two-step link never did", async () => {
+    const order = await unmatchedOrder();
+    await as(ADMIN);
+    await db.exec(`select public.link_order_to_student('${order}', '${a}')`);
+    await as(null);
+    assert.equal(await minutes(a), 10 * 60);
+    assert.equal(await credits(a), 1);
+
+    // Moving it to the right student moves the grants with it.
+    await as(ADMIN);
+    await db.exec(`select public.link_order_to_student('${order}', '${b}')`);
+    await db.exec(`select public.link_order_to_student('${order}', '${b}')`);
+    await as(null);
+    assert.equal(await minutes(a), 0);
+    assert.equal(await credits(a), 0);
+    assert.equal(await minutes(b), 10 * 60, "and only once, however many times it is linked");
+    assert.equal(await credits(b), 1);
+  });
+
+  it("grants nothing for an order that has not been paid", async () => {
+    const order = await unmatchedOrder("pending");
+    const before = await minutes(a);
+    await as(ADMIN);
+    await db.exec(`select public.link_order_to_student('${order}', '${a}')`);
+    await as(null);
+    assert.equal(await minutes(a), before);
+  });
+
+  it("is refused to anybody but an administrator", async () => {
+    const order = await unmatchedOrder();
+    await as(TUTOR);
+    await assert.rejects(() => db.query(`select public.link_order_to_student('${order}', '${a}')`));
+    await as(null);
+  });
+
+  it("lists hour balances only for students the caller may see", async () => {
+    await as(STRANGER);
+    const mine = await db.query<{ student_id: string }>(`select student_id from public.tutoring_hour_balances()`);
+    assert.deepEqual(mine.rows.map((r) => r.student_id).sort(), [
+      (await one<{ id: string }>(`select id from public.students where profile_id = '${STRANGER}'`)).id,
+    ]);
+    // The fixture's tutor also has a student row of its own (the auth trigger
+    // makes one), so the test is: their student is in, the stranger is not.
+    const strangerId = (await one<{ id: string }>(`select id from public.students where profile_id = '${STRANGER}'`)).id;
+    await as(TUTOR);
+    const taught = (await db.query<{ student_id: string }>(`select student_id from public.tutoring_hour_balances()`))
+      .rows.map((r) => r.student_id);
+    assert.ok(taught.includes(studentId));
+    assert.ok(!taught.includes(strangerId));
+    assert.ok(!taught.includes(a) && !taught.includes(b));
+    await as(ADMIN);
+    const all = await db.query(`select * from public.tutoring_hour_balances()`);
+    assert.ok(all.rows.length >= 5);
+    await as(null);
+  });
+});

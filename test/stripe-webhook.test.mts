@@ -325,3 +325,34 @@ describe("the signal vocabulary", () => {
     assert.equal(plan.entitlement, undefined);
   });
 });
+
+describe("a tutoring package's hours", () => {
+  const hoursOrder = instalmentOrder({ grantsTutoringHours: 20, status: "instalments_active", amountPaidMinor: 33000 });
+
+  it("are taken back when the package is refunded in full", () => {
+    const plan = planFor(
+      signal({ kind: "refunded", objectId: "ch_h", amountRefundedMinor: 33000 }),
+      hoursOrder,
+    );
+    assert.equal(plan.entitlement, "revoke");
+  });
+
+  it("are reconsidered when an instalment plan ends unpaid", () => {
+    const plan = planFor(signal({ kind: "plan_ended", objectId: "sub_h", planCompleted: false }), hoursOrder);
+    assert.equal(plan.status, "cancelled");
+    assert.equal(plan.entitlement, "revoke");
+  });
+
+  it("are left alone by a failed instalment, which is retried", () => {
+    const plan = planFor(signal({ kind: "instalment_failed", objectId: "in_h" }), hoursOrder);
+    assert.equal(plan.entitlement, undefined);
+  });
+
+  it("leave an order that grants nothing with nothing to revoke", () => {
+    const plan = planFor(
+      signal({ kind: "refunded", objectId: "ch_n", amountRefundedMinor: 33000 }),
+      instalmentOrder({ status: "instalments_active", amountPaidMinor: 33000 }),
+    );
+    assert.equal(plan.entitlement, undefined);
+  });
+});

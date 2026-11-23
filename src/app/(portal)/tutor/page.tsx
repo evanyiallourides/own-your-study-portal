@@ -7,6 +7,7 @@ import { TutorDayBar, type DayStat } from "@/components/portal/tutor-day-bar";
 import { TutorTimetable } from "@/components/portal/tutor-timetable";
 import { PreLessonBriefing } from "@/components/portal/pre-lesson-briefing";
 import { TutorStudentCard } from "@/components/portal/tutor-student-card";
+import { hoursLabel } from "@/components/portal/student-records";
 import { ArrowRightIcon, CalendarIcon } from "@/components/ui/icons";
 import { Badge, ButtonLink, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
@@ -20,6 +21,7 @@ import { parseMeetingLink } from "@/lib/meetings/links";
 import { joinButtonProps } from "@/lib/meetings/present";
 import { stillRelevant, upcomingSince } from "@/lib/meetings/window";
 import { NEEDS_REVIEW } from "@/lib/status";
+import { isLowOnHours, planNeedsAttention } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
@@ -44,7 +46,7 @@ export default async function TutorHome() {
   startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
   const now = new Date().toISOString();
 
-  const [today, needsReview, upcoming, assignments, google] = await Promise.all([
+  const [today, needsReview, upcoming, assignments, google, balances, plans] = await Promise.all([
     repo.listLessons({
       tutorId,
       from: startOfToday.toISOString(),
@@ -55,6 +57,9 @@ export default async function TutorHome() {
     repo.listLessons({ tutorId, status: "scheduled", from: upcomingSince(), order: "asc", limit: 10 }),
     repo.listAssignments({ tutorId }),
     googleStateFor(session.profile.id),
+    /* Swallowed: a database without the hours migration still shows the day. */
+    repo.listHourBalances().catch(() => []),
+    repo.listStudyPlans().catch(() => []),
   ]);
 
   // A briefing for the very next lesson only. Three cards of prompts before a
@@ -138,6 +143,14 @@ export default async function TutorHome() {
   const uniqueStudents = activeStudents.filter(
     (a, i, arr) => arr.findIndex((x) => x.studentId === a.studentId) === i,
   );
+
+  /* The two things on a student's record that wait on the tutor rather than
+     on the student: a plan nobody has written or whose review date has come,
+     and hours running out, which is worth raising in the next lesson. */
+  const balanceFor = (studentId: string) => balances.find((b) => b.studentId === studentId) ?? null;
+  const planFor = (studentId: string) => plans.find((p) => p.studentId === studentId) ?? null;
+  const plansDue = uniqueStudents.filter((a) => planNeedsAttention(planFor(a.studentId)));
+  const lowOnHours = uniqueStudents.filter((a) => isLowOnHours(balanceFor(a.studentId)));
 
   return (
     <div className="space-y-12">
@@ -226,6 +239,55 @@ export default async function TutorHome() {
         </section>
       ) : null}
 
+      {plansDue.length > 0 || lowOnHours.length > 0 ? (
+        <section>
+          <SectionHead
+            eyebrow="Students"
+            title="Plans and hours"
+            description="A study plan is what a student and their parents read to know where they stand. Hours running low is worth mentioning in the next lesson."
+          />
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {plansDue.map((a) => (
+              <li key={`plan-${a.studentId}`}>
+                <Link
+                  href={`/tutor/students/${a.studentId}`}
+                  className="card card-interactive flex items-center justify-between gap-3 p-4"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-ink">{a.student!.profile.fullName}</span>
+                    <span className="block text-sm text-ink-500">
+                      {planFor(a.studentId) ? "Plan review is due" : "No study plan written yet"}
+                    </span>
+                  </span>
+                  <Badge tone="info">{planFor(a.studentId) ? "Review" : "Write plan"}</Badge>
+                </Link>
+              </li>
+            ))}
+            {lowOnHours.map((a) => {
+              const left = balanceFor(a.studentId)!.remainingMinutes;
+              return (
+                <li key={`hours-${a.studentId}`}>
+                  <Link
+                    href={`/tutor/students/${a.studentId}`}
+                    className="card card-interactive flex items-center justify-between gap-3 p-4"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-ink">{a.student!.profile.fullName}</span>
+                      <span className="block text-sm text-ink-500">
+                        {left < 0
+                          ? `Booked ${hoursLabel(-left)} beyond what was bought`
+                          : `${hoursLabel(left)} left to book`}
+                      </span>
+                    </span>
+                    <Badge tone="warning">Low on hours</Badge>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
       <section>
         <SectionHead
           title="My students"
@@ -255,6 +317,8 @@ export default async function TutorHome() {
                 subjects={activeStudents
                   .filter((a) => a.studentId === assignment.studentId && a.subject)
                   .map((a) => a.subject!.displayName)}
+                hours={balanceFor(assignment.studentId)}
+                plan={planFor(assignment.studentId)}
               />
             ))}
           </ul>

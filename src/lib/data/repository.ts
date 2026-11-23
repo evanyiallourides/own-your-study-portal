@@ -43,6 +43,7 @@ import type {
   IaSubmissionWithReviews,
   WiseUnmatchedTransfer,
   TutoringHours,
+  StudentHourBalance,
   ClassBoard,
   StudyPlan,
 } from "@/lib/types";
@@ -236,6 +237,8 @@ export interface Repository {
      administrator's correction, signed and noted like the IA credits. */
   getTutoringHours(studentId: string): Promise<TutoringHours>;
   adjustTutoringHours(studentId: string, minutes: number, note: string): Promise<void>;
+  /** Every visible student's balance in one read — for dashboards that list students. */
+  listHourBalances(): Promise<StudentHourBalance[]>;
 
   /* -- class boards & study plans --
      Read by the student, their parents and their tutors; written by their
@@ -244,6 +247,8 @@ export interface Repository {
   addClassBoard(input: ClassBoardInput): Promise<void>;
   removeClassBoard(boardId: string): Promise<void>;
   getStudyPlan(studentId: string): Promise<StudyPlan | null>;
+  /** Every plan the caller may see. */
+  listStudyPlans(): Promise<StudyPlan[]>;
   saveStudyPlan(studentId: string, input: StudyPlanInput): Promise<void>;
 
   /* -- orders -- */

@@ -62,6 +62,7 @@ const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/parent", label: "Home", icon: "home", exact: true },
     { href: "/parent/lessons", label: "Lessons", icon: "calendar" },
     { href: "/parent/progress", label: "Progress", icon: "chart" },
+    { href: "/parent/plan", label: "Review & Plan", icon: "spark" },
     { href: "/parent/billing", label: "Billing", icon: "card" },
   ],
 };

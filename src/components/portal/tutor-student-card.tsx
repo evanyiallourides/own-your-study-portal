@@ -1,8 +1,15 @@
 import Link from "next/link";
 
-import { Avatar } from "@/components/ui/primitives";
+import { hoursLabel } from "@/components/portal/student-records";
+import { Avatar, Badge } from "@/components/ui/primitives";
 import { formatDayAndTime, relativeDayLabel } from "@/lib/format";
-import type { Student } from "@/lib/types";
+import {
+  isLowOnHours,
+  planNeedsAttention,
+  type Student,
+  type StudentHourBalance,
+  type StudyPlan,
+} from "@/lib/types";
 
 export function TutorStudentCard({
   student,
@@ -10,13 +17,23 @@ export function TutorStudentCard({
   lastLessonAt,
   nextLessonAt,
   openHomework,
+  hours,
+  plan,
 }: {
   student: Student;
   subjects: string[];
   lastLessonAt?: string | null;
   nextLessonAt?: string | null;
   openHomework?: number;
+  /** Omitted to hide the hours line; null when the balance could not be read. */
+  hours?: StudentHourBalance | null;
+  /** Omitted to hide the plan badge; null when no plan has been written. */
+  plan?: StudyPlan | null;
 }) {
+  const showHours = hours !== undefined && hours !== null && hours.purchasedMinutes > 0;
+  const low = isLowOnHours(hours);
+  const planDue = plan !== undefined && planNeedsAttention(plan);
+
   return (
     <li>
       <Link
@@ -73,6 +90,19 @@ export function TutorStudentCard({
           <p className="mt-3 text-xs font-semibold text-warning">
             {openHomework} {openHomework === 1 ? "task" : "tasks"} outstanding
           </p>
+        ) : null}
+
+        {showHours || planDue ? (
+          <div className="mt-auto flex flex-wrap gap-1.5 pt-4">
+            {showHours ? (
+              <Badge tone={low ? "warning" : "neutral"}>
+                {hours!.remainingMinutes < 0
+                  ? `${hoursLabel(-hours!.remainingMinutes)} over`
+                  : `${hoursLabel(hours!.remainingMinutes)} left`}
+              </Badge>
+            ) : null}
+            {planDue ? <Badge tone="info">{plan ? "Plan review due" : "No study plan"}</Badge> : null}
+          </div>
         ) : null}
       </Link>
     </li>

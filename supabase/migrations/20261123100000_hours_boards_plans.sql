@@ -100,6 +100,38 @@ as $$
     );
 $$;
 
+-- Every visible student's hours in one round trip, for the owner's overview
+-- and the tutor's student list. The same visibility rule as above, applied per
+-- row, so a tutor gets the students they teach and nobody else.
+create or replace function public.tutoring_hour_balances()
+returns table (
+  student_id        uuid,
+  purchased_minutes integer,
+  used_minutes      integer,
+  booked_minutes    integer
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    s.id,
+    coalesce((select sum(e.minutes) from public.tutoring_hour_entries e
+               where e.student_id = s.id), 0)::integer,
+    coalesce((select sum(l.duration_minutes) from public.lessons l
+               where l.student_id = s.id and l.status <> 'cancelled'
+                 and l.scheduled_at <= now()), 0)::integer,
+    coalesce((select sum(l.duration_minutes) from public.lessons l
+               where l.student_id = s.id and l.status <> 'cancelled'
+                 and l.scheduled_at > now()), 0)::integer
+  from public.students s
+  where public.is_admin()
+     or s.id = public.current_student_id()
+     or public.parent_of_student(s.id)
+     or public.tutor_teaches_student(s.id);
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Pooled hours now count what was bought as well as what was booked.
 --
@@ -222,11 +254,113 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Linking an order by hand
+--
+-- The administrator's queue of unmatched payments used to set student_id and
+-- then call claim_orders_for_profile() — which only looks at orders with no
+-- student and a matching email, so it skipped the very order just linked and
+-- nothing it bought was ever applied. This attaches and applies in one step.
+--
+-- Re-linking moves what the order granted: an order linked to the wrong
+-- student and then to the right one leaves its hours and IA credits with the
+-- right one, rather than with whoever was picked first (the purchase entries
+-- are unique per order, so a second insert would silently do nothing).
+-- ---------------------------------------------------------------------------
+create or replace function public.link_order_to_student(p_order_id uuid, p_student_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order record;
+begin
+  if not public.is_admin() then
+    raise exception 'Only an administrator can link an order.' using errcode = '42501';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id for update;
+  if not found then
+    raise exception 'That order does not exist.';
+  end if;
+  if not exists (select 1 from public.students where id = p_student_id) then
+    raise exception 'That student does not exist.';
+  end if;
+
+  update public.orders
+     set student_id = p_student_id,
+         claimed_at = now(),
+         claimed_by = auth.uid()
+   where id = p_order_id;
+
+  -- Nothing is granted for money that has not arrived or has gone back.
+  if v_order.status not in ('paid', 'instalments_active', 'past_due', 'completed') then
+    return;
+  end if;
+
+  -- Question banks: extend once per order. A row already carrying this order
+  -- belongs to the student it was first given to; withdraw it there.
+  if v_order.grants_question_bank_days is not null then
+    update public.question_bank_access
+       set granted = false, note = 'Order moved to another student'
+     where order_id = p_order_id and student_id <> p_student_id;
+
+    if not exists (
+      select 1 from public.question_bank_access
+       where order_id = p_order_id and student_id = p_student_id
+    ) then
+      insert into public.question_bank_access as qba
+        (student_id, granted, expires_at, note, order_id, granted_at)
+      values (
+        p_student_id, true,
+        now() + make_interval(days => v_order.grants_question_bank_days),
+        'Paid: ' || v_order.sku_name, p_order_id, now()
+      )
+      on conflict (student_id) do update
+        set granted    = true,
+            expires_at = greatest(coalesce(qba.expires_at, now()), now())
+                         + make_interval(days => v_order.grants_question_bank_days),
+            note       = 'Paid: ' || v_order.sku_name,
+            order_id   = p_order_id;
+    end if;
+  end if;
+
+  if v_order.grants_ia_markings is not null then
+    update public.ia_credit_entries
+       set student_id = p_student_id
+     where order_id = p_order_id and reason = 'purchase';
+    insert into public.ia_credit_entries (student_id, delta, reason, order_id, note)
+    values (p_student_id, v_order.grants_ia_markings * greatest(v_order.quantity, 1),
+            'purchase', p_order_id, 'Paid: ' || v_order.sku_name)
+    on conflict do nothing;
+  end if;
+
+  if v_order.grants_tutoring_hours is not null then
+    update public.tutoring_hour_entries
+       set student_id = p_student_id
+     where order_id = p_order_id and reason = 'purchase';
+    insert into public.tutoring_hour_entries (student_id, minutes, reason, order_id, note)
+    values (p_student_id, v_order.grants_tutoring_hours * 60 * greatest(v_order.quantity, 1),
+            'purchase', p_order_id, 'Paid: ' || v_order.sku_name)
+    on conflict do nothing;
+  end if;
+end;
+$$;
+
+revoke all on function public.link_order_to_student(uuid, uuid) from public, anon;
+grant execute on function public.link_order_to_student(uuid, uuid) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
 -- Taking hours back
 --
 -- Only what has not been booked. A refunded order whose hours were already
 -- taught does not leave the student in debt: the balance is clamped at what
 -- is still free, exactly as the IA credits are.
+--
+-- How much is owed back depends on why. A refund returned the money, so every
+-- hour it bought is owed. An instalment plan that ended early (the order is
+-- 'cancelled') kept what was paid, so only the unpaid share of the hours is
+-- owed: two of four instalments paid keeps half the hours.
 -- ---------------------------------------------------------------------------
 create or replace function public.revoke_tutoring_hours_for_order(p_order_id uuid)
 returns integer
@@ -237,8 +371,10 @@ as $$
 declare
   v_student_id uuid;
   v_granted    integer;
+  v_owed       integer;
   v_free       integer;
   v_take       integer;
+  v_order      record;
 begin
   select student_id, minutes into v_student_id, v_granted
   from public.tutoring_hour_entries
@@ -256,12 +392,23 @@ begin
     return 0;
   end if;
 
+  select status, amount_paid_minor, amount_total_minor into v_order
+  from public.orders where id = p_order_id;
+
+  v_owed := v_granted;
+  if v_order.status = 'cancelled' and coalesce(v_order.amount_total_minor, 0) > 0 then
+    v_owed := ceil(
+      v_granted * greatest(v_order.amount_total_minor - v_order.amount_paid_minor, 0)::numeric
+        / v_order.amount_total_minor
+    )::integer;
+  end if;
+
   v_free := public.tutoring_minutes_purchased(v_student_id) - (
     select coalesce(sum(duration_minutes), 0)::integer
       from public.lessons
      where student_id = v_student_id and status <> 'cancelled'
   );
-  v_take := least(v_granted, greatest(v_free, 0));
+  v_take := least(v_owed, greatest(v_free, 0));
 
   if v_take <= 0 then
     return 0;
@@ -315,7 +462,9 @@ select o.student_id,
   from public.orders o
  where o.student_id is not null
    and o.grants_tutoring_hours is not null
-   and o.status in ('paid', 'instalments_active', 'completed')
+   -- past_due too: it was claimed while the plan was running, and a failed
+   -- instalment is retried, not a withdrawal of the lessons.
+   and o.status in ('paid', 'instalments_active', 'past_due', 'completed')
 on conflict do nothing;
 
 -- ---------------------------------------------------------------------------

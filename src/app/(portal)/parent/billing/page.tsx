@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { HoursSummary } from "@/components/portal/student-records";
 import { Badge, Card, Rule, SectionHead } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/ui/states";
 import { requireRole } from "@/lib/auth/session";
@@ -11,7 +12,9 @@ import {
   type Order,
   type OrderPayment,
   type OrderStatus,
+  type IaCreditLedger,
   type QuestionBankAccess,
+  type TutoringHours,
 } from "@/lib/types";
 
 /* ==========================================================================
@@ -69,7 +72,7 @@ const STATUS: Record<OrderStatus, { label: string; tone: StatusTone; detail: str
     label: "Payment didn't go through",
     tone: "danger",
     detail:
-      "The last instalment was declined. Lessons carry on as normal — your card is retried automatically over the next few days, and it usually succeeds on the second attempt.",
+      "The last instalment was declined. Lessons carry on as normal — the debit is retried automatically over the next few days, and it usually succeeds on the second attempt.",
   },
   completed: {
     label: "Completed",
@@ -199,18 +202,18 @@ function AccessCard({ access, childName }: { access: QuestionBankAccess; childNa
       <p className="max-w-[60ch] text-sm leading-relaxed text-ink-500">
         {access.granted
           ? access.source === "pooled-hours"
-            ? `Included at no extra cost, because ${childName} has booked ${pluralise(access.pooledHours, "tutoring hour")}.`
+            ? `Included at no extra cost, because ${childName} has ${pluralise(access.pooledHours, "tutoring hour")} bought or booked.`
             : access.expiresAt
               ? `Paid for on ${childName}'s account, running to ${formatDate(access.expiresAt)}.`
               : `Paid for on ${childName}'s account.`
-          : `An add-on, and also included once ${childName} has booked ${pluralise(access.freeAtHours, "tutoring hour")}.`}
+          : `An add-on, and also included once ${childName} has ${pluralise(access.freeAtHours, "tutoring hour")} bought or booked.`}
       </p>
 
       {!access.granted ? (
         <div>
           <div className="flex items-baseline justify-between gap-2 text-sm">
             <span className="text-ink-700">
-              {pluralise(access.pooledHours, "hour")} booked so far
+              {pluralise(access.pooledHours, "hour")} so far
             </span>
             <span className="tabular-nums text-ink-300">
               {pluralise(remaining, "hour")} to go
@@ -234,6 +237,48 @@ function AccessCard({ access, childName }: { access: QuestionBankAccess; childNa
   );
 }
 
+/** Hours and IA reviews: the two things a purchase credits that get used up. */
+function BalancesCard({
+  hours,
+  ia,
+}: {
+  hours: TutoringHours | null;
+  ia: IaCreditLedger | null;
+}) {
+  const hasHours = hours !== null && hours.purchasedMinutes > 0;
+  const hasIa = ia !== null && (ia.balance > 0 || ia.entries.length > 0);
+  if (!hasHours && !hasIa) return null;
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      {hasHours ? (
+        <Card>
+          <p className="font-display text-lg font-semibold text-ink">Tutoring hours</p>
+          <div className="mt-3">
+            <HoursSummary hours={hours!} compact />
+          </div>
+        </Card>
+      ) : null}
+      {hasIa ? (
+        <Card>
+          <p className="font-display text-lg font-semibold text-ink">IA reviews</p>
+          <div className="mt-3 flex flex-wrap items-baseline gap-2">
+            <p className="font-display text-3xl font-semibold tabular-nums text-ink">{ia!.balance}</p>
+            <p className="text-sm text-ink-500">review{ia!.balance === 1 ? "" : "s"} left to use</p>
+          </div>
+          <p className="mt-2 text-sm text-ink-500">
+            {pluralise(
+              ia!.entries.filter((e) => e.reason === "review").length,
+              "review",
+            )}{" "}
+            already used.
+          </p>
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
 /* -- the page ------------------------------------------------------------- */
 
 export default async function ParentBilling() {
@@ -252,14 +297,17 @@ export default async function ParentBilling() {
 
   const accounts = await Promise.all(
     children.map(async (child) => {
-      const [orders, access] = await Promise.all([
+      const [orders, access, hours, ia] = await Promise.all([
         repo.listOrdersForStudent(child.id),
         repo.getQuestionBankAccess(child.id),
+        // Swallowed: a database behind on migrations still shows the orders.
+        repo.getTutoringHours(child.id).catch(() => null),
+        repo.getIaCredits(child.id).catch(() => null),
       ]);
       const payments = await Promise.all(
         orders.map(async (order) => [order.id, await repo.getOrderPayments(order.id)] as const),
       );
-      return { child, orders, access, payments: new Map(payments) };
+      return { child, orders, access, hours, ia, payments: new Map(payments) };
     }),
   );
 
@@ -291,7 +339,7 @@ export default async function ParentBilling() {
                   : order.skuName,
               )
               .join(", ")}
-            . Your card is retried automatically over the next few days, and lessons carry on
+            . The debit is retried automatically over the next few days, and lessons carry on
             in the meantime. If it keeps failing, write to{" "}
             <a className="font-semibold text-accent hover:underline" href={`mailto:${SUPPORT_EMAIL}`}>
               {SUPPORT_EMAIL}
@@ -301,7 +349,7 @@ export default async function ParentBilling() {
         </Card>
       ) : null}
 
-      {accounts.map(({ child, orders, access, payments }) => {
+      {accounts.map(({ child, orders, access, hours, ia, payments }) => {
         /* Per currency, never blended — see the note at the top of the file. */
         const paid = new Map<string, number>();
         for (const order of orders) {
@@ -328,6 +376,8 @@ export default async function ParentBilling() {
                 ))}
               </div>
             ) : null}
+
+            <BalancesCard hours={hours} ia={ia} />
 
             <AccessCard access={access} childName={child.profile.firstName} />
 

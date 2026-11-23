@@ -37,6 +37,12 @@ export default async function TutorStudents({
   });
 
   const now = new Date().toISOString();
+  /* One read each for every student, rather than one per card. Swallowed: a
+     database without the hours migration still lists the students. */
+  const [balances, plans] = await Promise.all([
+    repo.listHourBalances().catch(() => []),
+    repo.listStudyPlans().catch(() => []),
+  ]);
   const cards = await Promise.all(
     studentIds.map(async (studentId) => {
       const assignment = active.find((a) => a.studentId === studentId)!;
@@ -53,6 +59,8 @@ export default async function TutorStudents({
         lastLessonAt: past[0]?.scheduledAt ?? null,
         nextLessonAt: next[0]?.scheduledAt ?? null,
         openHomework: homework.length,
+        hours: balances.find((b) => b.studentId === studentId) ?? null,
+        plan: plans.find((p) => p.studentId === studentId) ?? null,
       };
     }),
   );
@@ -85,6 +93,8 @@ export default async function TutorStudents({
               lastLessonAt={card.lastLessonAt}
               nextLessonAt={card.nextLessonAt}
               openHomework={card.openHomework}
+              hours={card.hours}
+              plan={card.plan}
             />
           ))}
         </ul>

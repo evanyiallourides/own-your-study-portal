@@ -536,6 +536,35 @@ export function summariseTutoringHours(
   };
 }
 
+/** One student's hours without the ledger, for lists of students. */
+export interface StudentHourBalance {
+  studentId: string;
+  purchasedMinutes: number;
+  usedMinutes: number;
+  bookedMinutes: number;
+  remainingMinutes: number;
+}
+
+/** Hours left at or below which a student is flagged as running low. */
+export const LOW_HOURS_MINUTES = 2 * 60;
+
+/**
+ * Whether a student needs topping up: they bought hours and have two or fewer
+ * left, or have booked beyond what they bought. A student who never bought any
+ * through the checkout is not flagged — they may pay another way.
+ */
+export function isLowOnHours(balance: StudentHourBalance | TutoringHours | null | undefined): boolean {
+  if (!balance || balance.purchasedMinutes <= 0) return false;
+  return balance.remainingMinutes <= LOW_HOURS_MINUTES;
+}
+
+/** Whether a plan is missing or its review date has arrived. */
+export function planNeedsAttention(plan: StudyPlan | null | undefined, today: Date = new Date()): boolean {
+  if (!plan) return true;
+  if (!plan.nextReviewOn) return false;
+  return plan.nextReviewOn <= today.toISOString().slice(0, 10);
+}
+
 /* ==========================================================================
    Class boards and study plans
    ========================================================================== */

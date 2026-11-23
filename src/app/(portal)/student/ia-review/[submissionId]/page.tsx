@@ -23,7 +23,7 @@ export default async function StudentIaReviewDetail({
   const session = await requireRole("student");
   const repo = await repositoryFor(session);
 
-  const entry = await repo.getIaSubmission(submissionId);
+  const entry = await repo.getIaSubmission(submissionId).catch(() => null);
   if (!entry) notFound();
 
   const { submission } = entry;
