@@ -15,6 +15,8 @@ export default async function BitcoinStatus({ params }: { params: Promise<{ orde
   const { data: order, error } = await createSupabaseAdminClient().from("orders")
     .select("status, sku_name, amount_total_minor, currency, btcpay_status, btcpay_additional_status")
     .eq("id", orderId).eq("provider", "btcpay").maybeSingle();
+  // 42703: the btcpay columns are not there yet (migration unapplied), so no Bitcoin order can exist.
+  if (error?.code === "42703") notFound();
   if (error) throw new Error("Could not read payment status");
   if (!order || !isCurrency(order.currency)) notFound();
   const paid = ["paid", "completed"].includes(order.status);
